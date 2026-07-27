@@ -1,0 +1,39 @@
+# Preset: Balance-sheet de-risking — alternate lens for same-data demo
+label: "Q2 FY27 — Balance-sheet de-risking"
+defining_priority: >
+  De-risk the balance sheet: tighten collections, protect liquidity, and
+  contain compliance exposure. Acquisition funding is paused as a framing
+  priority — WC and GST hygiene come first.
+face_weights:
+  steward: 0.45
+  operator: 0.30
+  strategist: 0.15
+  catalyst: 0.10
+kra_ranks:
+  - STW-1
+  - OPR-4
+  - STW-2
+  - STW-3
+  - OPR-1
+  - STR-2
+  - STR-1
+  - CAT-5
+risk_appetite: moderate
+red_lines:
+  - id: RL-1
+    type: level
+    metric: cash_balance_cr
+    operator: lt
+    threshold: 22.0
+    description: "Cash below buffered covenant of ₹22 Cr"
+  - id: RL-2
+    type: event
+    trigger: on_new_record
+    table: erp_gst_events
+    event_type: show_cause_notice
+    description: "Any new GST show-cause notice"
+preferences:
+  max_items: 7
+  depth: standard
+  cadence: "Monday 08:00 IST"
+  channel: in_app_and_email

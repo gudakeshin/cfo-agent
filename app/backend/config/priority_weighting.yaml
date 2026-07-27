@@ -1,0 +1,40 @@
+# Layer 2 seed — Acquisition readiness (Q2 FY27)
+# Edits via PUT /api/weighting create immutable weighting_versions rows.
+label: "Q2 FY27 — Acquisition readiness"
+defining_priority: >
+  Lock acquisition financing and preserve covenant headroom while cleaning
+  working-capital optics ahead of due diligence. Growth is secondary to
+  funding readiness this quarter.
+face_weights:
+  steward: 0.35
+  operator: 0.20
+  strategist: 0.35
+  catalyst: 0.10
+kra_ranks:
+  - STR-1
+  - STW-1
+  - STW-2
+  - STW-3
+  - OPR-4
+  - STR-2
+  - OPR-1
+  - CAT-5
+risk_appetite: moderate  # low | moderate | high — raises/lowers Filter surfacing bar
+red_lines:
+  - id: RL-1
+    type: level
+    metric: cash_balance_cr
+    operator: lt
+    threshold: 22.0  # ₹ Cr — buffered covenant (raw covenant is 20)
+    description: "Cash below buffered covenant of ₹22 Cr"
+  - id: RL-2
+    type: event
+    trigger: on_new_record
+    table: erp_gst_events
+    event_type: show_cause_notice
+    description: "Any new GST show-cause notice"
+preferences:
+  max_items: 7
+  depth: standard  # brief | standard | deep
+  cadence: "Monday 08:00 IST"
+  channel: in_app_and_email

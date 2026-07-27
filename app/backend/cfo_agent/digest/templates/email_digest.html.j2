@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>CFO Digest {{ digest.week }}</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f6f8;font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f6f8;padding:24px 0;">
+    <tr><td align="center">
+      <table role="presentation" width="640" cellspacing="0" cellpadding="0" style="background:#ffffff;border:1px solid #dde1e6;">
+        <tr><td style="padding:28px 32px;background:#0b3d2e;color:#ffffff;">
+          <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.85;">CFO Agentic Intelligence</div>
+          <div style="font-size:22px;margin-top:8px;font-weight:bold;">Weekly Digest · {{ digest.week }}</div>
+          <div style="font-size:15px;margin-top:12px;line-height:1.4;">{{ digest.headline }}</div>
+        </td></tr>
+
+        {% if data_health and (data_health.stale or data_health.warnings) %}
+        <tr><td style="padding:16px 32px;background:#fff4e5;border-bottom:1px solid #f0d9a8;font-size:14px;">
+          <strong>Data health warning</strong>
+          {% for w in data_health.warnings %}<div>{{ w }}</div>{% endfor %}
+        </td></tr>
+        {% endif %}
+
+        {% if digest.empty_bar %}
+        <tr><td style="padding:28px 32px;font-size:15px;">
+          Nothing met the surfacing bar this week under the current risk appetite.
+        </td></tr>
+        {% endif %}
+
+        {% for item in items %}
+        <tr><td style="padding:24px 32px;border-top:1px solid #e8ecf0;">
+          <div style="font-size:12px;color:#5c6b73;">
+            #{{ item.rank }}
+            {% if item.is_red_line %}<span style="color:#b00020;font-weight:bold;"> · RED LINE</span>{% endif %}
+            {% if item.kra_ids %} · {{ item.kra_ids | join(', ') }}{% endif %}
+          </div>
+          <div style="font-size:18px;font-weight:bold;margin:6px 0 12px;">{{ item.title }}</div>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="font-size:14px;line-height:1.5;">
+            <tr><td style="padding:4px 0;"><strong>What</strong> — {{ item.what }}</td></tr>
+            <tr><td style="padding:4px 0;"><strong>Why</strong> — {{ item.why }}</td></tr>
+            <tr><td style="padding:4px 0;"><strong>Connects</strong> — {{ item.connects }}</td></tr>
+            <tr><td style="padding:4px 0;"><strong>Action</strong> — {{ item.action }}</td></tr>
+          </table>
+          {% if item.footnotes %}
+          <div style="margin-top:12px;padding-top:10px;border-top:1px dotted #ccd3d9;font-size:12px;color:#4a5560;">
+            <strong>Sources</strong>
+            <ol style="margin:6px 0 0 18px;padding:0;">
+              {% for fn in item.footnotes %}<li style="margin-bottom:4px;">{{ fn }}</li>{% endfor %}
+            </ol>
+          </div>
+          {% endif %}
+        </td></tr>
+        {% endfor %}
+
+        <tr><td style="padding:20px 32px;background:#f7f9fa;font-size:12px;color:#5c6b73;">
+          Weighting: {{ digest.weighting_label }} · Framework version recorded on digest
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>

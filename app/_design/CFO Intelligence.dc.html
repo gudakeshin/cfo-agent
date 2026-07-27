@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+:root{
+  --green-500:#86BC25;--green-600:#6FA01E;--green-700:#5C8618;--green-400:#9CCB45;--green-200:#D3E7A8;--green-100:#EAF3D6;--green-050:#F4F8EA;
+  --ink-900:#1A1A1A;--ink-800:#242424;--ink-700:#333333;--gray-600:#555555;--gray-500:#6B6B6B;--gray-400:#8C8C8C;--gray-300:#BFBFBF;--gray-200:#E2E2E2;--gray-150:#ECECEA;--gray-100:#F4F4F2;--white:#FFFFFF;
+  --status-green:#5F9E1E;--status-amber:#E0A02D;--status-red:#D64B3F;--status-blue:#2A6FDB;--status-green-tint:#E7F2D6;--status-amber-tint:#FBEECF;--status-red-tint:#F8DEDB;
+  --font-display:'Archivo','Helvetica Neue',Arial,sans-serif;--font-sans:'Archivo','Helvetica Neue',Arial,sans-serif;--font-mono:'IBM Plex Mono',ui-monospace,monospace;
+  --radius-sm:3px;--radius-md:4px;--radius-lg:6px;--radius-pill:999px;
+  --shadow-sm:0 1px 2px rgba(26,26,26,0.06);--shadow-md:0 2px 8px rgba(26,26,26,0.08);--shadow-panel:0 4px 16px rgba(26,26,26,0.10);
+  --ease:cubic-bezier(0.2,0,0.1,1);
+}
+*{box-sizing:border-box;}
+body{margin:0;font-family:var(--font-sans);-webkit-font-smoothing:antialiased;}
+a{color:var(--green-600);text-decoration:none;}
+a:hover{color:var(--green-700);text-decoration:underline;}
+::-webkit-scrollbar{width:8px;height:8px;}
+::-webkit-scrollbar-thumb{background:var(--gray-300);border-radius:4px;}
+@keyframes spin{to{transform:rotate(360deg);}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
+</style>
+</helmet>
+
+<div style="display:flex;min-height:100vh;background:var(--gray-100);color:var(--ink-900);">
+
+  <aside style="width:232px;flex-shrink:0;background:var(--ink-900);color:var(--white);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;">
+    <div style="padding:22px 20px 18px;border-bottom:1px solid rgba(255,255,255,0.1);">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">
+        <span style="width:9px;height:9px;border-radius:50%;background:var(--green-500);flex-shrink:0;"></span>
+        <span style="font-family:var(--font-display);font-weight:800;font-size:16.5px;letter-spacing:-0.01em;">Deloitte</span>
+      </div>
+      <div style="font-size:12.5px;color:rgba(255,255,255,0.55);font-weight:500;letter-spacing:0.01em;padding-left:17px;">CFO Agentic Intelligence</div>
+    </div>
+
+    <nav style="flex:1;padding:16px 12px;display:flex;flex-direction:column;gap:2px;overflow-y:auto;">
+      <div style="font-size:10.5px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.38);padding:6px 10px 8px;">Intelligence</div>
+      <sc-for list="{{ navPrimary }}" as="item" hint-placeholder-count="1">
+        <button type="button" onClick="{{ item.onClick }}" style="{{ item.style }}" style-hover="{{ item.hoverStyle }}">
+          <span style="width:17px;height:17px;flex-shrink:0;" dangerouslySetInnerHTML="{{ item.iconHtml }}"></span>
+          <span>{{ item.label }}</span>
+          <sc-if value="{{ item.badge }}" hint-placeholder-val="{{ false }}">
+            <span style="margin-left:auto;background:var(--status-red);color:#fff;font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:999px;">{{ item.badge }}</span>
+          </sc-if>
+        </button>
+      </sc-for>
+
+      <div style="font-size:10.5px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.38);padding:18px 10px 8px;">Configure</div>
+      <sc-for list="{{ navSecondary }}" as="item" hint-placeholder-count="1">
+        <button type="button" onClick="{{ item.onClick }}" style="{{ item.style }}" style-hover="{{ item.hoverStyle }}">
+          <span style="width:17px;height:17px;flex-shrink:0;" dangerouslySetInnerHTML="{{ item.iconHtml }}"></span>
+          <span>{{ item.label }}</span>
+        </button>
+      </sc-for>
+    </nav>
+
+    <div style="padding:14px 20px;border-top:1px solid rgba(255,255,255,0.1);font-size:11.5px;color:rgba(255,255,255,0.4);">
+      Single-user demo · localhost
+    </div>
+  </aside>
+
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column;">
+
+    <sc-if value="{{ hasAlerts }}" hint-placeholder-val="{{ false }}">
+      <div style="background:var(--status-red-tint);border-bottom:1px solid rgba(214,75,63,0.25);padding:10px 28px;display:flex;align-items:center;flex-wrap:wrap;gap:10px 22px;">
+        <sc-for list="{{ alerts }}" as="a" hint-placeholder-count="1">
+          <div style="display:flex;align-items:center;gap:9px;font-size:13.5px;">
+            <span style="background:var(--status-red);color:#fff;font-size:10px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;padding:2px 7px;border-radius:3px;">Red line</span>
+            <strong style="font-weight:600;color:var(--ink-900);">{{ a.title }}</strong>
+            <span style="color:var(--gray-600);">· {{ a.weekLabel }}</span>
+            <button type="button" onClick="{{ a.onAck }}" style="font-size:12px;padding:3px 10px;background:transparent;border:1px solid rgba(214,75,63,0.45);color:var(--status-red);border-radius:3px;cursor:pointer;font-weight:600;">Acknowledge</button>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <main style="flex:1;padding:32px 40px 64px;max-width:1180px;width:100%;">
+
+      <sc-if value="{{ isInbox }}" hint-placeholder-val="{{ true }}">
+        <div>
+          <header style="margin-bottom:26px;">
+            <h1 style="margin:0 0 6px;font-family:var(--font-display);font-size:27px;font-weight:800;letter-spacing:-0.01em;color:var(--ink-900);">Digest inbox</h1>
+            <p style="margin:0;font-size:15px;color:var(--gray-600);max-width:60ch;">Weekly CFO intelligence — mapped to the Four Faces framework, weighted by this quarter's priorities.</p>
+          </header>
+
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:28px;">
+            <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:16px 18px;">
+              <div style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:var(--gray-500);margin-bottom:8px;">Digests this quarter</div>
+              <div style="font-family:var(--font-display);font-size:28px;font-weight:800;color:var(--ink-900);line-height:1;">12</div>
+            </div>
+            <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:16px 18px;border-top:3px solid var(--status-red);">
+              <div style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:var(--gray-500);margin-bottom:8px;">Active red lines</div>
+              <div style="font-family:var(--font-display);font-size:28px;font-weight:800;color:var(--status-red);line-height:1;">1</div>
+            </div>
+            <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:16px 18px;">
+              <div style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:var(--gray-500);margin-bottom:8px;">Surfacing precision</div>
+              <div style="font-family:var(--font-display);font-size:28px;font-weight:800;color:var(--green-600);line-height:1;">78%</div>
+            </div>
+            <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:16px 18px;">
+              <div style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:var(--gray-500);margin-bottom:8px;">Avg insights / week</div>
+              <div style="font-family:var(--font-display);font-size:28px;font-weight:800;color:var(--ink-900);line-height:1;">4.2</div>
+            </div>
+          </div>
+
+          <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:18px 20px;margin-bottom:26px;display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;">
+            <label style="display:block;min-width:220px;">
+              <span style="display:block;margin-bottom:6px;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--gray-500);">Week</span>
+              <div style="position:relative;">
+                <select value="{{ selectedWeek }}" onChange="{{ onWeekChange }}" style="appearance:none;width:100%;padding:9px 32px 9px 12px;font-family:var(--font-sans);font-size:14px;font-weight:500;color:var(--ink-900);background:var(--white);border:1px solid var(--gray-300);border-radius:var(--radius-sm);cursor:pointer;">
+                  <sc-for list="{{ weekOptions }}" as="w" hint-placeholder-count="1">
+                    <option value="{{ w.value }}">{{ w.label }}</option>
+                  </sc-for>
+                </select>
+                <span style="position:absolute;right:12px;top:50%;transform:translateY(-50%);pointer-events:none;color:var(--gray-500);font-size:11px;">▾</span>
+              </div>
+            </label>
+            <button type="button" onClick="{{ onGenerate }}" disabled="{{ generateDisabled }}" style="{{ generateBtnStyle }}">
+              {{ generateLabel }}
+            </button>
+            <span style="font-size:13px;color:var(--gray-500);margin-left:auto;align-self:center;">Pipeline: Map → Weight → Connect → Filter → Synthesize → Surface</span>
+          </div>
+
+          <sc-if value="{{ showProgress }}" hint-placeholder-val="{{ false }}">
+            <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:18px 20px;margin-bottom:24px;animation:fadeIn 0.2s var(--ease);">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+                <span style="width:14px;height:14px;border:2px solid var(--green-500);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;flex-shrink:0;"></span>
+                <strong style="font-size:14px;font-weight:600;">Generating digest for {{ progressWeekLabel }}</strong>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <sc-for list="{{ pipelineSteps }}" as="step" hint-placeholder-count="6">
+                  <span style="{{ step.style }}">{{ step.label }}</span>
+                </sc-for>
+              </div>
+            </div>
+          </sc-if>
+
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <sc-for list="{{ digests }}" as="d" hint-placeholder-count="3">
+              <button type="button" onClick="{{ d.onOpen }}" style="text-align:left;cursor:pointer;background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:18px 20px;display:flex;flex-direction:column;gap:8px;transition:border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);" style-hover="{border-color:'var(--green-500)',boxShadow:'var(--shadow-sm)'}">
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                  <sc-if value="{{ d.hasRedLine }}" hint-placeholder-val="{{ false }}">
+                    <span style="background:var(--status-red);color:#fff;font-size:10px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;padding:2px 7px;border-radius:3px;">Red line</span>
+                  </sc-if>
+                  <sc-if value="{{ d.empty_bar }}" hint-placeholder-val="{{ false }}">
+                    <span style="background:var(--gray-150);color:var(--gray-500);font-size:10px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;padding:2px 7px;border-radius:3px;">Empty bar</span>
+                  </sc-if>
+                  <span style="font-family:var(--font-mono);font-size:12px;color:var(--gray-500);">{{ d.weekLabel }}</span>
+                </div>
+                <h3 style="margin:0;font-family:var(--font-display);font-size:17px;font-weight:700;color:var(--ink-900);letter-spacing:-0.005em;">{{ d.headline }}</h3>
+                <div style="font-size:13px;color:var(--gray-500);display:flex;gap:6px;">
+                  <span>{{ d.item_count }} insights</span><span>·</span><span>{{ d.weighting_label }}</span><span>·</span><span>{{ d.createdLabel }}</span>
+                </div>
+              </button>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isDetail }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <button type="button" onClick="{{ backToInbox }}" style="display:inline-flex;align-items:center;gap:6px;background:none;border:none;color:var(--green-600);font-size:13.5px;font-weight:600;cursor:pointer;padding:0;margin-bottom:14px;">← Digest inbox</button>
+          <header style="margin-bottom:8px;">
+            <h1 style="margin:0 0 8px;font-family:var(--font-display);font-size:26px;font-weight:800;letter-spacing:-0.01em;color:var(--ink-900);">{{ activeDigest.headline }}</h1>
+            <div style="font-size:14px;color:var(--gray-600);margin-bottom:14px;">{{ activeDigest.weekLabel }} · {{ activeDigest.weighting_label }}</div>
+          </header>
+
+          <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:14px 18px;margin-bottom:22px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+            <span style="font-size:13.5px;color:var(--gray-600);">Email delivery: <strong style="color:var(--status-green);font-weight:700;">Sent</strong> · outbox <code style="font-family:var(--font-mono);font-size:12px;background:var(--gray-100);padding:2px 5px;border-radius:2px;">digest-w28.html</code></span>
+            <button type="button" onClick="{{ onResend }}" style="margin-left:auto;font-size:13px;padding:7px 14px;background:transparent;border:1px solid var(--gray-300);border-radius:var(--radius-sm);color:var(--ink-900);font-weight:600;cursor:pointer;">Resend email</button>
+          </div>
+
+          <div style="background:var(--status-amber-tint);border:1px solid rgba(224,160,45,0.35);border-radius:var(--radius-md);padding:14px 18px;margin-bottom:26px;">
+            <div style="font-size:13.5px;font-weight:700;color:var(--ink-900);margin-bottom:4px;">Data health · Degraded</div>
+            <div style="font-size:13px;color:var(--gray-600);">18,420 invoices · Latest receipt 2026-07-14 · GST notice feed delayed by 6 hours</div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:18px;">
+            <sc-for list="{{ activeDigest.items }}" as="item" hint-placeholder-count="4">
+              <article style="{{ item.cardStyle }}">
+                <header style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
+                  <span style="font-family:var(--font-mono);font-size:13px;color:var(--gray-400);">#{{ item.rank }}</span>
+                  <h3 style="margin:0;font-family:var(--font-display);font-size:18px;font-weight:700;color:var(--ink-900);flex:1;min-width:200px;">{{ item.title }}</h3>
+                  <sc-if value="{{ item.is_red_line }}" hint-placeholder-val="{{ false }}">
+                    <span style="background:var(--status-red);color:#fff;font-size:10px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;padding:2px 7px;border-radius:3px;">Red line</span>
+                  </sc-if>
+                  <span style="font-family:var(--font-mono);font-size:12px;color:var(--gray-400);">score {{ item.scoreLabel }}</span>
+                </header>
+
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px 24px;margin-bottom:14px;">
+                  <div>
+                    <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--green-600);margin-bottom:5px;">What</div>
+                    <p style="margin:0;font-size:14.5px;line-height:1.55;color:var(--ink-700);">{{ item.what }}</p>
+                  </div>
+                  <div>
+                    <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--green-600);margin-bottom:5px;">Why it matters</div>
+                    <p style="margin:0;font-size:14.5px;line-height:1.55;color:var(--ink-700);">{{ item.why }}</p>
+                  </div>
+                  <sc-if value="{{ item.connects }}" hint-placeholder-val="{{ false }}">
+                    <div>
+                      <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--gray-500);margin-bottom:5px;">Connects</div>
+                      <p style="margin:0;font-size:14.5px;line-height:1.55;color:var(--ink-700);">{{ item.connects }}</p>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ item.action }}" hint-placeholder-val="{{ false }}">
+                    <div style="background:var(--green-050);border-radius:var(--radius-sm);padding:10px 12px;">
+                      <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--green-700);margin-bottom:5px;">Recommended action</div>
+                      <p style="margin:0;font-size:14.5px;line-height:1.55;color:var(--ink-900);font-weight:500;">{{ item.action }}</p>
+                    </div>
+                  </sc-if>
+                </div>
+
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;">
+                  <sc-for list="{{ item.citations }}" as="c" hint-placeholder-count="1">
+                    <button type="button" onClick="{{ c.onClick }}" style="font-family:var(--font-mono);font-size:11.5px;padding:3px 9px;background:var(--gray-100);border:1px solid var(--gray-200);border-radius:3px;color:var(--ink-700);cursor:pointer;">{{ c.id }}</button>
+                  </sc-for>
+                </div>
+
+                <div style="border-top:1px solid var(--gray-200);padding-top:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                  <sc-for list="{{ item.verdicts }}" as="v" hint-placeholder-count="3">
+                    <button type="button" onClick="{{ v.onClick }}" style="{{ v.style }}">{{ v.label }}</button>
+                  </sc-for>
+                  <span style="margin-left:auto;font-size:13px;color:var(--gray-500);">{{ item.feedbackHint }}</span>
+                </div>
+              </article>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isWeighting }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <header style="margin-bottom:26px;">
+            <h1 style="margin:0 0 6px;font-family:var(--font-display);font-size:27px;font-weight:800;letter-spacing:-0.01em;">Priority weighting</h1>
+            <p style="margin:0;font-size:15px;color:var(--gray-600);max-width:64ch;">This quarter's lens on the Four Faces — saving creates a new immutable version.</p>
+          </header>
+
+          <div style="display:flex;gap:8px;margin-bottom:26px;flex-wrap:wrap;">
+            <sc-for list="{{ presets }}" as="p" hint-placeholder-count="3">
+              <button type="button" onClick="{{ p.onClick }}" style="{{ p.style }}">{{ p.label }}</button>
+            </sc-for>
+          </div>
+
+          <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:22px 24px;margin-bottom:20px;">
+            <h3 style="margin:0 0 16px;font-family:var(--font-display);font-size:16px;font-weight:700;">Face weights</h3>
+            <div style="display:flex;flex-direction:column;gap:14px;">
+              <sc-for list="{{ faceWeights }}" as="f" hint-placeholder-count="4">
+                <div style="display:grid;grid-template-columns:110px 1fr 46px;gap:14px;align-items:center;">
+                  <span style="font-size:14px;font-weight:600;color:var(--ink-900);">{{ f.name }}</span>
+                  <input type="range" min="0" max="1" step="0.01" value="{{ f.value }}" onChange="{{ f.onChange }}" style="width:100%;accent-color:var(--green-500);" />
+                  <span style="font-family:var(--font-mono);font-size:13px;color:var(--gray-600);text-align:right;">{{ f.pct }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:22px 24px;margin-bottom:20px;">
+            <h3 style="margin:0 0 6px;font-family:var(--font-display);font-size:16px;font-weight:700;">KRA rank order</h3>
+            <p style="margin:0 0 14px;font-size:13px;color:var(--gray-500);">Use the arrows to reorder — highest priority first.</p>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <sc-for list="{{ kraRanks }}" as="k" hint-placeholder-count="5">
+                <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--gray-100);border:1px solid var(--gray-200);border-radius:var(--radius-sm);">
+                  <span style="font-family:var(--font-mono);font-size:12px;color:var(--gray-400);width:20px;">{{ k.pos }}</span>
+                  <span style="flex:1;font-size:14px;font-weight:500;">{{ k.name }}</span>
+                  <sc-if value="{{ k.noFeed }}" hint-placeholder-val="{{ false }}">
+                    <span style="font-size:10.5px;background:var(--status-amber-tint);color:var(--status-amber);padding:2px 7px;border-radius:3px;font-weight:600;">no live feed</span>
+                  </sc-if>
+                  <button type="button" onClick="{{ k.onUp }}" disabled="{{ k.upDisabled }}" style="width:26px;height:26px;border:1px solid var(--gray-300);background:var(--white);border-radius:3px;cursor:pointer;font-size:12px;color:var(--ink-700);">↑</button>
+                  <button type="button" onClick="{{ k.onDown }}" disabled="{{ k.downDisabled }}" style="width:26px;height:26px;border:1px solid var(--gray-300);background:var(--white);border-radius:3px;cursor:pointer;font-size:12px;color:var(--ink-700);">↓</button>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:22px 24px;margin-bottom:20px;">
+            <h3 style="margin:0 0 6px;font-family:var(--font-display);font-size:16px;font-weight:700;">Risk appetite</h3>
+            <div style="display:flex;gap:8px;margin-top:12px;">
+              <sc-for list="{{ riskOptions }}" as="r" hint-placeholder-count="3">
+                <button type="button" onClick="{{ r.onClick }}" style="{{ r.style }}">{{ r.label }}</button>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:22px 24px;margin-bottom:24px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+              <h3 style="margin:0;font-family:var(--font-display);font-size:16px;font-weight:700;">Red lines</h3>
+              <span style="font-size:13px;color:var(--gray-500);">{{ redLines.length }} active</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <sc-for list="{{ redLines }}" as="rl" hint-placeholder-count="2">
+                <div style="display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--gray-200);border-radius:var(--radius-sm);border-left:3px solid var(--status-red);">
+                  <span style="font-family:var(--font-mono);font-size:12px;color:var(--gray-400);">{{ rl.id }}</span>
+                  <span style="flex:1;font-size:13.5px;color:var(--ink-700);">{{ rl.description }}</span>
+                  <span style="font-family:var(--font-mono);font-size:12.5px;color:var(--ink-900);background:var(--gray-100);padding:3px 8px;border-radius:3px;">{{ rl.rule }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <button type="button" onClick="{{ onSaveWeighting }}" style="padding:11px 22px;background:var(--green-500);color:var(--ink-900);border:1px solid var(--green-500);border-radius:var(--radius-sm);font-weight:700;font-size:14px;cursor:pointer;">
+            {{ saveWeightingLabel }}
+          </button>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isFeedback }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <header style="margin-bottom:26px;">
+            <h1 style="margin:0 0 6px;font-family:var(--font-display);font-size:27px;font-weight:800;letter-spacing:-0.01em;">Feedback log</h1>
+            <p style="margin:0;font-size:15px;color:var(--gray-600);">How surfaced insights land — precision and novel actionable signal over time.</p>
+          </header>
+
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:28px;">
+            <sc-for list="{{ feedbackStats }}" as="s" hint-placeholder-count="5">
+              <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:16px 16px;">
+                <div style="font-family:var(--font-display);font-size:26px;font-weight:800;color:var(--ink-900);line-height:1;">{{ s.value }}</div>
+                <div style="font-size:12px;color:var(--gray-500);margin-top:7px;">{{ s.label }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);overflow:hidden;">
+            <table style="width:100%;border-collapse:collapse;font-size:13.5px;">
+              <thead>
+                <tr style="background:var(--gray-100);">
+                  <th style="text-align:left;padding:11px 16px;font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--gray-500);">Insight</th>
+                  <th style="text-align:left;padding:11px 16px;font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--gray-500);">Verdict</th>
+                  <th style="text-align:left;padding:11px 16px;font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--gray-500);">Note</th>
+                  <th style="text-align:left;padding:11px 16px;font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--gray-500);">Updated</th>
+                </tr>
+              </thead>
+              <tbody>
+                <sc-for list="{{ feedbackRows }}" as="row" hint-placeholder-count="4">
+                  <tr style="border-top:1px solid var(--gray-200);">
+                    <td style="padding:12px 16px;font-weight:500;">{{ row.title }}</td>
+                    <td style="padding:12px 16px;"><span style="{{ row.verdictStyle }}">{{ row.verdictLabel }}</span></td>
+                    <td style="padding:12px 16px;color:var(--gray-500);max-width:22ch;">{{ row.note }}</td>
+                    <td style="padding:12px 16px;color:var(--gray-500);">{{ row.updated }}</td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isHealth }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <header style="margin-bottom:26px;">
+            <h1 style="margin:0 0 6px;font-family:var(--font-display);font-size:27px;font-weight:800;letter-spacing:-0.01em;">Data health</h1>
+            <p style="margin:0;font-size:15px;color:var(--gray-600);">ERP feed freshness and integrity.</p>
+          </header>
+
+          <div style="background:var(--status-amber-tint);border:1px solid rgba(224,160,45,0.35);border-radius:var(--radius-md);padding:18px 20px;margin-bottom:26px;">
+            <div style="font-size:15px;font-weight:700;color:var(--ink-900);margin-bottom:6px;">Degraded</div>
+            <div style="font-size:13.5px;color:var(--gray-600);line-height:1.6;">18,420 invoices · Latest receipt 2026-07-14 · Latest cash 2026-07-15</div>
+            <ul style="margin:8px 0 0;padding-left:18px;font-size:13.5px;color:var(--gray-600);">
+              <li>GST notice feed delayed by 6 hours</li>
+            </ul>
+          </div>
+
+          <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:22px 24px;">
+            <h3 style="margin:0 0 6px;font-family:var(--font-display);font-size:16px;font-weight:700;">Regenerate ERP data</h3>
+            <p style="margin:0 0 16px;font-size:13.5px;color:var(--gray-600);">Regeneration cascades wipe digests, alerts, signals, feedback, and archival memory. Memory blocks are kept.</p>
+            <div style="display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:14px;">
+              <label style="display:block;">
+                <span style="display:block;margin-bottom:6px;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--gray-500);">Stale days offset</span>
+                <input type="number" min="0" max="30" value="{{ staleDays }}" onChange="{{ onStaleDaysChange }}" style="width:120px;padding:9px 12px;border:1px solid var(--gray-300);border-radius:var(--radius-sm);font-size:14px;" />
+              </label>
+              <button type="button" onClick="{{ onOpenConfirm }}" style="padding:10px 18px;background:var(--white);border:1px solid var(--status-red);color:var(--status-red);border-radius:var(--radius-sm);font-weight:700;font-size:14px;cursor:pointer;">Regenerate data</button>
+            </div>
+
+            <sc-if value="{{ confirmOpen }}" hint-placeholder-val="{{ false }}">
+              <div style="background:var(--status-red-tint);border:1px solid rgba(214,75,63,0.3);border-radius:var(--radius-sm);padding:16px;">
+                <div style="font-weight:700;font-size:14px;margin-bottom:6px;color:var(--ink-900);">Confirm cascade wipe</div>
+                <p style="margin:0 0 12px;font-size:13.5px;color:var(--gray-600);">This deletes all digests, alerts, signals, feedback, and chat history. This cannot be undone.</p>
+                <div style="display:flex;gap:8px;">
+                  <button type="button" onClick="{{ onConfirmRegen }}" style="padding:8px 16px;background:var(--status-red);color:#fff;border:none;border-radius:var(--radius-sm);font-weight:700;font-size:13.5px;cursor:pointer;">Yes, regenerate</button>
+                  <button type="button" onClick="{{ onCancelRegen }}" style="padding:8px 16px;background:var(--white);border:1px solid var(--gray-300);border-radius:var(--radius-sm);font-weight:600;font-size:13.5px;cursor:pointer;">Cancel</button>
+                </div>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isMemory }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <header style="margin-bottom:22px;">
+            <h1 style="margin:0 0 6px;font-family:var(--font-display);font-size:27px;font-weight:800;letter-spacing:-0.01em;">Agent memory</h1>
+            <p style="margin:0;font-size:15px;color:var(--gray-600);">Priority context, revision history, and archival recall.</p>
+          </header>
+
+          <button type="button" onClick="{{ onConsolidate }}" style="margin-bottom:20px;padding:10px 18px;background:var(--green-500);color:var(--ink-900);border:1px solid var(--green-500);border-radius:var(--radius-sm);font-weight:700;font-size:14px;cursor:pointer;">
+            {{ consolidateLabel }}
+          </button>
+
+          <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:16px 18px;margin-bottom:24px;">
+            <span style="display:block;margin-bottom:8px;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--gray-500);">Archival search</span>
+            <div style="display:flex;gap:8px;">
+              <input type="text" placeholder="e.g. GST notices in the last quarter" value="{{ searchQuery }}" onChange="{{ onSearchChange }}" style="flex:1;padding:9px 12px;border:1px solid var(--gray-300);border-radius:var(--radius-sm);font-size:14px;" />
+              <button type="button" onClick="{{ onSearch }}" style="padding:9px 18px;background:var(--ink-900);color:#fff;border:none;border-radius:var(--radius-sm);font-weight:600;font-size:13.5px;cursor:pointer;">Search</button>
+            </div>
+          </div>
+
+          <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:22px 24px;margin-bottom:24px;">
+            <h3 style="margin:0 0 4px;font-family:var(--font-display);font-size:16px;font-weight:700;">Memory graph</h3>
+            <p style="margin:0 0 18px;font-size:13px;color:var(--gray-500);">How core blocks, archival recall, and this week's digest connect.</p>
+            <div style="position:relative;width:100%;aspect-ratio:720/260;">
+              <svg viewBox="0 0 720 260" style="position:absolute;inset:0;width:100%;height:100%;display:block;" role="img" aria-label="Memory graph connections">
+                <sc-for list="{{ memoryEdges }}" as="e" hint-placeholder-count="6">
+                  <line x1="{{ e.x1 }}" y1="{{ e.y1 }}" x2="{{ e.x2 }}" y2="{{ e.y2 }}" stroke="var(--gray-300)" stroke-width="1.5"></line>
+                </sc-for>
+                <sc-for list="{{ memoryNodes }}" as="n" hint-placeholder-count="5">
+                  <rect x="{{ n.x }}" y="{{ n.y }}" width="{{ n.w }}" height="{{ n.h }}" rx="6" fill="{{ n.fill }}" stroke="{{ n.stroke }}" stroke-width="1.5"></rect>
+                </sc-for>
+              </svg>
+              <sc-for list="{{ memoryNodes }}" as="n" hint-placeholder-count="5">
+                <div style="{{ n.labelBoxStyle }}">
+                  <div style="{{ n.labelStyle }}">{{ n.label }}</div>
+                  <sc-if value="{{ n.sub }}" hint-placeholder-val="{{ false }}">
+                    <div style="{{ n.subStyle }}">{{ n.sub }}</div>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display:flex;gap:16px;margin-top:14px;flex-wrap:wrap;">
+              <sc-for list="{{ memoryLegend }}" as="l" hint-placeholder-count="3">
+                <span style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--gray-600);">
+                  <span style="width:9px;height:9px;border-radius:2px;background:{{ l.color }};display:inline-block;"></span>{{ l.label }}
+                </span>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:14px;">
+            <sc-for list="{{ memoryBlocks }}" as="b" hint-placeholder-count="3">
+              <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);overflow:hidden;">
+                <div style="padding:14px 18px;border-bottom:1px solid var(--gray-200);display:flex;justify-content:space-between;align-items:center;background:var(--gray-100);">
+                  <strong style="font-family:var(--font-mono);font-size:13.5px;">{{ b.name }}</strong>
+                  <span style="font-size:12px;color:var(--gray-500);">{{ b.revisions }} revisions</span>
+                </div>
+                <div style="padding:16px 18px;font-size:14px;line-height:1.6;color:var(--ink-700);">{{ b.content }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+    </main>
+  </div>
+
+  <sc-if value="{{ activeCitation }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;z-index:100;background:rgba(26,26,26,0.4);display:flex;align-items:center;justify-content:center;padding:20px;" onClick="{{ closeCitation }}">
+      <div style="background:var(--white);border-radius:var(--radius-md);box-shadow:var(--shadow-panel);max-width:520px;width:100%;padding:22px 24px;" onClick="{{ stopProp }}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;">
+          <h3 style="margin:0;font-family:var(--font-display);font-size:16px;font-weight:700;">Citation · {{ activeCitation }}</h3>
+          <button type="button" onClick="{{ closeCitation }}" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--gray-500);line-height:1;">×</button>
+        </div>
+        <pre style="font-family:var(--font-mono);font-size:12.5px;background:var(--gray-100);padding:12px 14px;border-radius:var(--radius-sm);white-space:pre-wrap;word-break:break-word;margin:0;color:var(--ink-700);">{{ activeCitationBody }}</pre>
+      </div>
+    </div>
+  </sc-if>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+const ICONS = {
+  inbox: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v10.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5Z"/><path d="M4 5l8 6 8-6"/></svg>',
+  weighting: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 4v16M6 6h9l-2 3 2 3H6"/><path d="M18 20V4"/></svg>',
+  feedback: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 5h14v10H9l-4 4V5Z"/></svg>',
+  health: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21s-7-4.35-9-9a5 5 0 0 1 9-3 5 5 0 0 1 9 3c-2 4.65-9 9-9 9Z"/></svg>',
+  memory: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M10 4v16"/></svg>',
+};
+
+const WEEKS = ['2026-W25','2026-W26','2026-W27','2026-W28'];
+const WEEK_LABEL = { '2026-W25':'Week 25 · 15–21 Jun','2026-W26':'Week 26 · 22–28 Jun','2026-W27':'Week 27 · 29 Jun–5 Jul','2026-W28':'Week 28 · 6–12 Jul' };
+
+const DIGESTS = [
+  { id: 3, week: '2026-W28', headline: 'Cash runway tightens as GST notice exposure climbs', item_count: 5, weighting_label: 'Balance-sheet de-risking', empty_bar: false, created: '15 Jul, 9:14 AM', hasRedLine: true },
+  { id: 2, week: '2026-W27', headline: 'Working capital drag deepens in BFSI receivables', item_count: 4, weighting_label: 'Default weighting', empty_bar: false, created: '8 Jul, 9:02 AM', hasRedLine: false },
+  { id: 1, week: '2026-W26', headline: 'Quarter holds steady — no red lines triggered', item_count: 3, weighting_label: 'Default weighting', empty_bar: true, created: '1 Jul, 9:00 AM', hasRedLine: false },
+];
+
+const ITEMS_BY_DIGEST = {
+  3: [
+    { id: 1, rank: 1, title: 'Cash balance breaches covenant buffer', is_red_line: true, priority_score: 0.94,
+      what: 'Cash balance fell to ₹18.4 Cr, below the ₹22 Cr red-line floor set in the current weighting.',
+      why: 'Breaches the covenant headroom trigger three weeks ahead of the quarter-end lender review.',
+      connects: 'Compounds the AR overdue build-up flagged last week — collections have not offset the GST outflow.',
+      action: 'Escalate to treasury; pull forward the ₹15 Cr working-capital facility drawdown.',
+      citations: ['cash-ledger-w28-04', 'covenant-schedule-v3'] },
+    { id: 2, rank: 2, title: 'DSO climbs to 61 days in BFSI banking vertical', is_red_line: false, priority_score: 0.71,
+      what: 'Days sales outstanding for the BFSI banks vertical rose from 52 to 61 days over four weeks.',
+      why: 'Vertical carries 34% of quarter revenue; a sustained rise erodes free cash flow guidance.',
+      connects: 'Three of the five largest overdue accounts are BFSI clients also named in the GST notice review.',
+      action: 'Trigger dunning escalation for accounts over 45 days; review credit terms at next vertical review.',
+      citations: ['ar-aging-w28'] },
+    { id: 3, rank: 3, title: 'New GST show-cause notice — ₹4.2 Cr exposure', is_red_line: false, priority_score: 0.64,
+      what: 'A show-cause notice was issued this week covering input tax credit claims worth ₹4.2 Cr.',
+      why: 'Adds to open GST exposure and narrows the window for a clean response before the statutory deadline.',
+      connects: '', action: 'Route to tax counsel for response drafting within 10 working days.',
+      citations: ['gst-notice-2026-0714'] },
+    { id: 4, rank: 4, title: 'Opex ratio ticks up to 68.4%', is_red_line: false, priority_score: 0.52,
+      what: 'Operating expense ratio rose 1.1 points quarter-over-quarter to 68.4%.',
+      why: 'Still within board tolerance but the trend has been upward for three consecutive weeks.',
+      connects: '', action: '',
+      citations: ['opex-ledger-w28'] },
+  ],
+};
+
+const KRA_NAMES = ['Cash & liquidity discipline', 'Working capital efficiency', 'Regulatory & compliance exposure', 'Growth capital allocation', 'Cost structure & opex'];
+
+class Component extends DCLogic {
+  state = {
+    view: 'inbox',
+    selectedDigestId: 3,
+    selectedWeek: '2026-W28',
+    generating: false,
+    progressStep: 0,
+    generatedDigests: [],
+    feedback: {},
+    activeCitation: null,
+    alertAcked: false,
+    faceWeights: { Steward: 0.32, Operator: 0.28, Strategist: 0.22, Catalyst: 0.18 },
+    kraOrder: [0, 1, 2, 3, 4],
+    riskAppetite: 'moderate',
+    staleDays: 0,
+    confirmOpen: false,
+    consolidating: false,
+    searchQuery: '',
+  };
+
+  go(view) { this.setState({ view }); }
+
+  onGenerate = () => {
+    if (this.state.generating) return;
+    this.setState({ generating: true, progressStep: 0 });
+    this._tick();
+  };
+
+  _tick() {
+    const steps = 6;
+    this._timer = setTimeout(() => {
+      const next = this.state.progressStep + 1;
+      if (next >= steps) {
+        this.setState({ generating: false, progressStep: 0 });
+      } else {
+        this.setState({ progressStep: next });
+        this._tick();
+      }
+    }, 550);
+  }
+
+  componentWillUnmount() { if (this._timer) clearTimeout(this._timer); }
+
+  setFeedback(itemId, verdict) {
+    this.setState((s) => ({ feedback: { ...s.feedback, [itemId]: verdict } }));
+  }
+
+  moveKra(idx, dir) {
+    this.setState((s) => {
+      const order = [...s.kraOrder];
+      const j = idx + dir;
+      if (j < 0 || j >= order.length) return {};
+      [order[idx], order[j]] = [order[j], order[idx]];
+      return { kraOrder: order };
+    });
+  }
+
+  renderVals() {
+    const s = this.state;
+    const navItem = (key, label, badge) => ({
+      label, badge,
+      iconHtml: { __html: ICONS[key] },
+      onClick: () => this.go(key),
+      style: {
+        display: 'flex', alignItems: 'center', gap: 11, width: '100%', textAlign: 'left',
+        padding: '9px 11px', borderRadius: 4, border: 'none', cursor: 'pointer',
+        background: s.view === key ? 'rgba(134,188,37,0.16)' : 'transparent',
+        color: s.view === key ? '#9CCB45' : 'rgba(255,255,255,0.78)',
+        fontWeight: s.view === key ? 700 : 500, fontSize: 14, fontFamily: 'var(--font-sans)',
+      },
+      hoverStyle: { background: s.view === key ? 'rgba(134,188,37,0.16)' : 'rgba(255,255,255,0.06)' },
+    });
+
+    const alerts = !s.alertAcked ? [{
+      title: 'Cash balance below red line', weekLabel: 'Week 28',
+      onAck: () => this.setState({ alertAcked: true }),
+    }] : [];
+
+    const digests = [...s.generatedDigests, ...DIGESTS].map((d) => ({
+      ...d,
+      weekLabel: WEEK_LABEL[d.week] || d.week,
+      createdLabel: d.created,
+      onOpen: () => this.setState({ view: 'detail', selectedDigestId: d.id }),
+    }));
+
+    const rawItems = ITEMS_BY_DIGEST[s.selectedDigestId] || ITEMS_BY_DIGEST[3];
+    const digestMeta = digests.find((d) => d.id === s.selectedDigestId) || digests[0];
+
+    const items = rawItems.map((item) => {
+      const fb = s.feedback[item.id];
+      const verdictDefs = [
+        { key: 'acted_on', label: 'Acted on' },
+        { key: 'useful', label: 'Useful' },
+        { key: 'set_aside', label: 'Set aside' },
+      ];
+      return {
+        ...item,
+        scoreLabel: item.priority_score.toFixed(2),
+        cardStyle: {
+          background: 'var(--white)', border: '1px solid var(--gray-200)', borderRadius: 6,
+          borderLeft: item.is_red_line ? '4px solid var(--status-red)' : '1px solid var(--gray-200)',
+          padding: '20px 22px',
+        },
+        citations: (item.citations || []).map((id) => ({ id, onClick: () => this.setState({ activeCitation: id }) })),
+        verdicts: verdictDefs.map((v) => ({
+          label: v.label,
+          onClick: () => this.setFeedback(item.id, v.key),
+          style: {
+            fontSize: 12.5, fontWeight: 600, padding: '6px 13px', borderRadius: 4, cursor: 'pointer',
+            border: fb === v.key ? '1px solid var(--green-600)' : '1px solid var(--gray-300)',
+            background: fb === v.key ? 'var(--green-500)' : 'var(--white)',
+            color: fb === v.key ? 'var(--ink-900)' : 'var(--gray-600)',
+          },
+        })),
+        feedbackHint: fb ? '' : 'Rate this insight to tune next week\u2019s weighting',
+      };
+    });
+
+    const PIPELINE = ['map', 'weight', 'connect', 'filter', 'synthesize', 'surface'];
+    const pipelineSteps = PIPELINE.map((label, i) => ({
+      label,
+      style: {
+        fontSize: 12, fontWeight: 600, padding: '5px 11px', borderRadius: 3, textTransform: 'capitalize',
+        border: '1px solid ' + (i < s.progressStep ? 'rgba(95,158,30,0.3)' : i === s.progressStep ? 'var(--green-500)' : 'var(--gray-200)'),
+        background: i < s.progressStep ? 'var(--status-green-tint)' : i === s.progressStep ? 'var(--green-050)' : 'var(--gray-100)',
+        color: i < s.progressStep ? 'var(--status-green)' : i === s.progressStep ? 'var(--green-700)' : 'var(--gray-500)',
+      },
+    }));
+
+    const presetDefs = ['Default weighting', 'Balance-sheet de-risking', 'Growth acceleration'];
+    const presets = presetDefs.map((label) => ({
+      label,
+      onClick: () => {},
+      style: {
+        fontSize: 13, fontWeight: 600, padding: '8px 15px', borderRadius: 4, cursor: 'pointer',
+        border: '1px solid var(--gray-300)', background: 'var(--white)', color: 'var(--ink-900)',
+      },
+    }));
+
+    const faceWeights = Object.entries(s.faceWeights).map(([name, value]) => ({
+      name, value, pct: Math.round(value * 100) + '%',
+      onChange: (e) => this.setState((st) => ({ faceWeights: { ...st.faceWeights, [name]: Number(e.target.value) } })),
+    }));
+
+    const kraRanks = s.kraOrder.map((origIdx, pos) => ({
+      pos: pos + 1, name: KRA_NAMES[origIdx], noFeed: origIdx === 3,
+      upDisabled: pos === 0, downDisabled: pos === s.kraOrder.length - 1,
+      onUp: () => this.moveKra(pos, -1), onDown: () => this.moveKra(pos, 1),
+    }));
+
+    const riskDefs = [{ k: 'low', l: 'Low' }, { k: 'moderate', l: 'Moderate' }, { k: 'high', l: 'High' }];
+    const riskOptions = riskDefs.map((r) => ({
+      label: r.l, onClick: () => this.setState({ riskAppetite: r.k }),
+      style: {
+        fontSize: 13, fontWeight: 600, padding: '8px 16px', borderRadius: 4, cursor: 'pointer',
+        border: '1px solid ' + (s.riskAppetite === r.k ? 'var(--green-600)' : 'var(--gray-300)'),
+        background: s.riskAppetite === r.k ? 'var(--green-500)' : 'var(--white)',
+        color: s.riskAppetite === r.k ? 'var(--ink-900)' : 'var(--gray-600)',
+      },
+    }));
+
+    const redLines = [
+      { id: 'RL-01', description: 'Cash balance falls below covenant floor', rule: 'cash_balance_cr < 22' },
+      { id: 'RL-02', description: 'New GST show-cause notice recorded', rule: 'on new event' },
+    ];
+
+    const feedbackStats = [
+      { value: 9, label: 'Acted on' }, { value: 14, label: 'Useful' }, { value: 3, label: 'Set aside' },
+      { value: '78%', label: 'Surfacing precision' }, { value: 6, label: 'G1 rollup (acted \u00b7 novel)' },
+    ];
+
+    const verdictStyleFor = (v) => {
+      const map = { 'Acted on': 'var(--status-green)', 'Useful': 'var(--status-blue)', 'Set aside': 'var(--gray-500)' };
+      const tint = { 'Acted on': 'var(--status-green-tint)', 'Useful': '#E4EDFB', 'Set aside': 'var(--gray-150)' };
+      return { fontSize: 12, fontWeight: 700, padding: '3px 9px', borderRadius: 3, color: map[v], background: tint[v] };
+    };
+    const feedbackRows = [
+      { title: 'Cash balance breaches covenant buffer', verdictLabel: 'Acted on', note: 'Escalated to treasury same day', updated: '15 Jul' },
+      { title: 'DSO climbs in BFSI vertical', verdictLabel: 'Useful', note: 'Good context, no action yet', updated: '15 Jul' },
+      { title: 'AR overdue build-up, retail vertical', verdictLabel: 'Set aside', note: '\u2014', updated: '8 Jul' },
+      { title: 'GST notice review cadence', verdictLabel: 'Acted on', note: 'Routed to tax counsel', updated: '8 Jul' },
+    ].map((r) => ({ ...r, verdictStyle: verdictStyleFor(r.verdictLabel) }));
+
+    const VW = 720, VH = 260;
+    const node = (cx, cy, w, h, label, sub, kind) => {
+      const palette = {
+        core: { fill: 'var(--ink-900)', stroke: 'var(--ink-900)', textColor: 'var(--white)', subColor: 'rgba(255,255,255,0.65)' },
+        block: { fill: 'var(--green-050)', stroke: 'var(--green-500)', textColor: 'var(--ink-900)', subColor: 'var(--gray-500)' },
+        archival: { fill: 'var(--white)', stroke: 'var(--gray-300)', textColor: 'var(--ink-900)', subColor: 'var(--gray-500)' },
+      }[kind];
+      const x = cx - w / 2, y = cy - h / 2;
+      return {
+        x, y, w, h, cx, cy, label, sub, ...palette,
+        labelBoxStyle: {
+          position: 'absolute', left: (x / VW * 100) + '%', top: (y / VH * 100) + '%',
+          width: (w / VW * 100) + '%', height: (h / VH * 100) + '%',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, pointerEvents: 'none', textAlign: 'center',
+        },
+        labelStyle: { fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 13, color: palette.textColor, lineHeight: 1.2 },
+        subStyle: { fontFamily: 'var(--font-sans)', fontSize: 11, color: palette.subColor },
+      };
+    };
+    const memoryNodes = [
+      node(90, 130, 150, 56, 'Agent memory', 'core context', 'core'),
+      node(340, 45, 170, 50, 'cfo_observations', '4 revisions', 'block'),
+      node(340, 130, 170, 50, 'priority_context', '2 revisions', 'block'),
+      node(340, 215, 170, 50, 'risk_tolerance', '1 revision', 'block'),
+      node(600, 130, 160, 56, 'Archival search', 'sqlite-vec recall', 'archival'),
+    ];
+    const memoryEdges = [1, 2, 3].map((i) => {
+      const a = memoryNodes[0], b = memoryNodes[i];
+      return { x1: a.x + a.w, y1: a.cy, x2: b.x, y2: b.cy };
+    }).concat([1, 2, 3].map((i) => {
+      const b = memoryNodes[i], c = memoryNodes[4];
+      return { x1: b.x + b.w, y1: b.cy, x2: c.x, y2: c.cy };
+    }));
+    const memoryLegend = [
+      { color: 'var(--ink-900)', label: 'Core context' },
+      { color: 'var(--green-500)', label: 'Memory block' },
+      { color: 'var(--white)', label: 'Archival recall' },
+    ];
+
+    const memoryBlocks = [
+      { name: 'cfo_observations', revisions: 4, content: 'CFO consistently prioritizes cash preservation over growth signals when covenant headroom drops below 15%. Prefers action items with a named owner and a date.' },
+      { name: 'priority_context', revisions: 2, content: 'Current quarter lens: Balance-sheet de-risking. Steward and Operator faces weighted above Strategist and Catalyst.' },
+      { name: 'risk_tolerance', revisions: 1, content: 'Moderate risk appetite. Escalate GST exposure above \u20b93 Cr per notice; escalate cash breaches immediately.' },
+    ];
+
+    const citationBodies = {
+      'cash-ledger-w28-04': 'invoice_ref: CASH-W28-04\nbalance_cr: 18.4\nas_of: 2026-07-15\nsource: erp_cash_ledger',
+      'covenant-schedule-v3': 'covenant_id: CV-2026-03\nfloor_cr: 22\nlender: Consortium A\nreview_date: 2026-08-02',
+      'ar-aging-w28': 'vertical: bfsi_banks\ndso_days: 61\nprior_dso_days: 52\nas_of: 2026-07-15',
+      'gst-notice-2026-0714': 'notice_type: show_cause_notice\nexposure_cr: 4.2\nissued: 2026-07-14\ndeadline: 2026-07-28',
+      'opex-ledger-w28': 'opex_ratio_pct: 68.4\nprior_pct: 67.3\nas_of: 2026-07-15',
+    };
+
+    return {
+      navPrimary: [navItem('inbox', 'Digest inbox', digests.some(d=>d.hasRedLine) && !s.alertAcked ? '1' : null)],
+      navSecondary: [navItem('weighting', 'Weighting'), navItem('feedback', 'Feedback log'), navItem('health', 'Data health'), navItem('memory', 'Memory')],
+      hasAlerts: alerts.length > 0,
+      alerts,
+      isInbox: s.view === 'inbox', isDetail: s.view === 'detail', isWeighting: s.view === 'weighting',
+      isFeedback: s.view === 'feedback', isHealth: s.view === 'health', isMemory: s.view === 'memory',
+      selectedWeek: s.selectedWeek,
+      weekOptions: WEEKS.map((w) => ({ value: w, label: WEEK_LABEL[w] })),
+      onWeekChange: (e) => this.setState({ selectedWeek: e.target.value }),
+      generateDisabled: s.generating,
+      generateLabel: s.generating ? 'Generating\u2026' : 'Generate digest',
+      generateBtnStyle: {
+        padding: '9px 20px', borderRadius: 4, fontWeight: 700, fontSize: 14, cursor: s.generating ? 'default' : 'pointer',
+        border: '1px solid var(--green-500)', background: s.generating ? 'var(--gray-200)' : 'var(--green-500)',
+        color: s.generating ? 'var(--gray-500)' : 'var(--ink-900)',
+      },
+      onGenerate: this.onGenerate,
+      showProgress: s.generating,
+      progressWeekLabel: WEEK_LABEL[s.selectedWeek],
+      pipelineSteps,
+      digests,
+      backToInbox: () => this.setState({ view: 'inbox' }),
+      activeDigest: { ...digestMeta, weekLabel: WEEK_LABEL[digestMeta.week] || digestMeta.week, items },
+      onResend: () => {},
+      activeCitation: s.activeCitation,
+      activeCitationBody: s.activeCitation ? citationBodies[s.activeCitation] : '',
+      closeCitation: () => this.setState({ activeCitation: null }),
+      stopProp: (e) => e.stopPropagation(),
+      presets,
+      faceWeights,
+      kraRanks,
+      riskOptions,
+      redLines,
+      saveWeightingLabel: 'Save weighting',
+      onSaveWeighting: () => {},
+      feedbackStats,
+      feedbackRows,
+      staleDays: s.staleDays,
+      onStaleDaysChange: (e) => this.setState({ staleDays: Number(e.target.value) }),
+      confirmOpen: s.confirmOpen,
+      onOpenConfirm: () => this.setState({ confirmOpen: true }),
+      onCancelRegen: () => this.setState({ confirmOpen: false }),
+      onConfirmRegen: () => this.setState({ confirmOpen: false }),
+      consolidateLabel: s.consolidating ? 'Consolidating\u2026' : 'Run consolidation',
+      onConsolidate: () => {
+        this.setState({ consolidating: true });
+        setTimeout(() => this.setState({ consolidating: false }), 900);
+      },
+      memoryBlocks,
+      memoryNodes, memoryEdges, memoryLegend,
+      searchQuery: s.searchQuery,
+      onSearchChange: (e) => this.setState({ searchQuery: e.target.value }),
+      onSearch: () => {},
+    };
+  }
+}
+
+</script>
+</body>
+</html>

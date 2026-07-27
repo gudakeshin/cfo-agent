@@ -1,0 +1,205 @@
+# Layer 1 — KRA Framework (stable, versioned)
+# Four Faces of the CFO, India regulatory surface
+version: "1.0.0"
+label: "Indian mid-market manufacturer — FY27 framework"
+india_regulatory_context: >
+  Companies Act 2013 (board reporting, related-party), SEBI LODR (listed disclosure,
+  material events), GST (ITC, show-cause notices, e-invoicing), FEMA (outbound M&A /
+  remittance), Ind AS (revenue, impairment, leases), transfer pricing (Form 3CEB,
+  APA). Red-line events and Steward KRAs are written against this surface.
+
+faces:
+  steward:
+    name: Steward
+    description: Protect assets, ensure compliance, report faithfully.
+    kras:
+      - id: STW-1
+        name: Working capital integrity
+        grounding: erp
+        metrics: [dso_days, dpo_days, cash_balance_cr, ar_overdue_pct]
+        concerns:
+          - Receivables aging stretch masking collection risk
+          - Payables stretch creating supplier concentration risk
+          - Cash headroom vs. bank covenants
+      - id: STW-2
+        name: Liquidity & covenant headroom
+        grounding: erp
+        metrics: [cash_balance_cr, covenant_headroom_cr]
+        concerns:
+          - Cash below buffered covenant (early warning before raw breach)
+          - Undrawn facility reliance masking structural squeeze
+      - id: STW-3
+        name: Tax & GST compliance posture
+        grounding: erp
+        metrics: [gst_open_notices, gst_notice_exposure_cr, itc_at_risk_cr]
+        concerns:
+          - Show-cause notices and demand orders
+          - ITC mismatches under Rule 36(4) / GSTR-2B
+          - Interest and penalty accrual on delayed remittance
+      - id: STW-4
+        name: Statutory & SEBI disclosure readiness
+        grounding: erp
+        metrics: [board_pack_readiness_score]
+        concerns:
+          - Material event disclosure lag under LODR Reg 30
+          - Related-party transaction documentation gaps
+          - Ind AS close quality ahead of board
+
+  operator:
+    name: Operator
+    description: Run the finance engine efficiently and reliably.
+    kras:
+      - id: OPR-1
+        name: Cost discipline by cost center
+        grounding: erp
+        metrics: [opex_ratio_pct, cost_center_variance_pct]
+        concerns:
+          - Opex ratio drift vs. plan
+          - Cost-center overruns concentrated in overhead
+      - id: OPR-2
+        name: Close cycle & process integrity
+        grounding: erp
+        metrics: [close_cycle_days, unreconciled_items]
+        concerns:
+          - Soft close stretch delaying insight
+          - Unreconciled AR/AP/bank items at week-end
+      - id: OPR-3
+        name: Procure-to-pay efficiency
+        grounding: erp
+        metrics: [dpo_days, ap_overdue_pct]
+        concerns:
+          - Early payment leakage vs. negotiated terms
+          - Overdue AP creating supplier friction
+      - id: OPR-4
+        name: Order-to-cash cycle health
+        grounding: erp
+        metrics: [dso_days, ar_overdue_pct, collections_coverage_pct]
+        concerns:
+          - Invoice dispute backlog
+          - Collections coverage below target on top accounts
+
+  strategist:
+    name: Strategist
+    description: Shape capital allocation and strategic moves.
+    kras:
+      - id: STR-1
+        name: Acquisition funding readiness
+        grounding: erp
+        metrics: [cash_balance_cr, covenant_headroom_cr, free_cash_flow_cr]
+        concerns:
+          - Working capital deterioration reducing cash available for deal funding
+          - Covenant headroom constraining acquisition leverage
+      - id: STR-2
+        name: Segment growth & mix
+        grounding: erp
+        metrics: [segment_revenue_growth_pct, revenue_concentration_pct]
+        concerns:
+          - Growth concentrated in one segment creating mix risk
+          - Soft segments masking headline growth
+      - id: STR-3
+        name: Capital structure optionality
+        grounding: erp
+        metrics: [cash_balance_cr, free_cash_flow_cr]
+        concerns:
+          - Cash trap vs. deployment opportunity
+          - Refinance window ahead of rate moves
+      - id: STR-4
+        name: Cross-border / FEMA readiness
+        grounding: none
+        metrics: []
+        concerns:
+          - Outbound remittance approvals for acquisition consideration
+          - FEMA Form ODI / ECB documentation readiness
+        note: "No live feed in v1 — ERP alone cannot ground FEMA status"
+
+  catalyst:
+    name: Catalyst
+    description: Drive change, talent, and decision quality across the enterprise.
+    kras:
+      - id: CAT-1
+        name: Decision-quality enablement
+        grounding: none
+        metrics: []
+        concerns:
+          - Board/management packs arriving late or incomplete
+          - Decision forums lacking forward-looking scenarios
+        note: "No live feed in v1"
+      - id: CAT-2
+        name: Finance talent & capability
+        grounding: none
+        metrics: []
+        concerns:
+          - Key-person risk in controllership / tax
+          - Upskilling lag on Ind AS / analytics
+        note: "No live feed in v1"
+      - id: CAT-3
+        name: Stakeholder narrative coherence
+        grounding: none
+        metrics: []
+        concerns:
+          - Investor / lender narrative inconsistent with internal signals
+          - Rating-agency Q&A exposure on WC / covenants
+        note: "No live feed in v1"
+      - id: CAT-4
+        name: Change program ROI
+        grounding: none
+        metrics: []
+        concerns:
+          - Transformation spend without measurable cycle-time or cost impact
+        note: "No live feed in v1"
+      - id: CAT-5
+        name: Cross-functional risk surfacing
+        grounding: erp
+        metrics: [gst_open_notices, dso_days]
+        concerns:
+          - Compliance or WC signals not reaching deal / ops forums in time
+
+relationships:
+  - id: REL-1
+    from: STW-1
+    to: STR-1
+    description: "Working capital deterioration reduces cash available for acquisition funding"
+  - id: REL-2
+    from: STW-2
+    to: STR-1
+    description: "Covenant headroom erosion constrains acquisition leverage capacity"
+  - id: REL-3
+    from: STW-3
+    to: STR-1
+    description: "Open GST show-cause notices create due-diligence and indemnity overhang on deals"
+  - id: REL-4
+    from: OPR-1
+    to: STR-3
+    description: "Opex overrun compresses free cash flow and capital deployment optionality"
+  - id: REL-5
+    from: OPR-4
+    to: STW-1
+    description: "Order-to-cash cycle failure feeds receivables aging and DSO stretch"
+  - id: REL-6
+    from: STW-3
+    to: CAT-5
+    description: "GST / tax events must reach cross-functional forums before they become deal blockers"
+  - id: REL-7
+    from: STR-2
+    to: STW-1
+    description: "Segment growth that is receivables-heavy can inflate DSO even as revenue rises"
+
+metric_map:
+  dso_days: [STW-1, OPR-4, CAT-5]
+  dpo_days: [STW-1, OPR-3]
+  cash_balance_cr: [STW-1, STW-2, STR-1, STR-3]
+  covenant_headroom_cr: [STW-2, STR-1]
+  ar_overdue_pct: [STW-1, OPR-4]
+  ap_overdue_pct: [OPR-3]
+  gst_open_notices: [STW-3, CAT-5]
+  gst_notice_exposure_cr: [STW-3]
+  itc_at_risk_cr: [STW-3]
+  opex_ratio_pct: [OPR-1]
+  cost_center_variance_pct: [OPR-1]
+  close_cycle_days: [OPR-2]
+  unreconciled_items: [OPR-2]
+  collections_coverage_pct: [OPR-4]
+  free_cash_flow_cr: [STR-1, STR-3]
+  segment_revenue_growth_pct: [STR-2]
+  revenue_concentration_pct: [STR-2]
+  board_pack_readiness_score: [STW-4]
