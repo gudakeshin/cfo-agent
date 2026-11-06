@@ -50,7 +50,7 @@ def step3_connect(
         ),
         {
             "type": "text",
-            "text": render_blocks_for_prompt(session),
+            "text": render_blocks_for_prompt(session, skip_managed=True),
         },
     ]
     user = (

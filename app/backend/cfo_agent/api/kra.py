@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from cfo_agent.kra import FrameworkError
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -29,6 +30,9 @@ class KraPutBody(BaseModel):
 
 
 def _framework_response(session) -> dict:
+    from cfo_agent.metrics_dsl import ensure_custom_metrics, visible_metric_ids
+
+    ensure_custom_metrics(session)
     fw = get_active_framework(session)
     ver = get_active_kra_version(session)
     kras = [
@@ -55,7 +59,7 @@ def _framework_response(session) -> dict:
             for r in fw.relationships
         ],
         "metric_map": fw.metric_map,
-        "registry_metrics": sorted(SIGNAL_REGISTRY.keys()),
+        "registry_metrics": visible_metric_ids(),
     }
 
 
@@ -163,7 +167,7 @@ def put_kra(body: KraPutBody):
                 {"id": reconciled.id, "label": reconciled.label} if reconciled else None
             ),
         }
-    except ValueError as e:
+    except FrameworkError as e:
         session.rollback()
         raise HTTPException(422, detail=str(e)) from e
     finally:

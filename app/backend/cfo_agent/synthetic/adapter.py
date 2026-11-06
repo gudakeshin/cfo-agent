@@ -11,7 +11,12 @@ from typing import Any, Protocol, runtime_checkable
 from sqlalchemy.orm import Session
 
 from cfo_agent.models import (
+    ErpBankAccount,
     ErpCashDaily,
+    ErpCreditNote,
+    ErpEntity,
+    ErpFxRate,
+    ErpGlEntry,
     ErpCovenant,
     ErpCustomer,
     ErpExpense,
@@ -24,6 +29,8 @@ from cfo_agent.models import (
 )
 
 ERP_TABLES = [
+    ErpCreditNote,
+    ErpGlEntry,
     ErpReceipt,
     ErpPayment,
     ErpSalesInvoice,
@@ -34,6 +41,9 @@ ERP_TABLES = [
     ErpGstEvent,
     ErpCovenant,
     ErpCustomer,
+    ErpBankAccount,
+    ErpFxRate,
+    ErpEntity,
 ]
 
 

@@ -1,0 +1,77 @@
+"""Deterministic (no-LLM) synthesis used when the LLM budget runs out or when a
+red-line item fails the citation gate. Every sentence here is built only from
+verified pipeline data, so it always passes the gate."""
+
+from __future__ import annotations
+
+from cfo_agent.pipeline.schemas import SectionBlock, SynthesizeItemOutput
+from cfo_agent.pipeline.step4_filter import FilterItem
+
+
+def allowed_citations_for(item: FilterItem) -> list[str]:
+    """The only citation IDs an item's synthesis may use."""
+    allowed: list[str] = []
+    if item.weighted:
+        s = item.weighted.mapped.signal
+        allowed.append(s.signal_id)
+        allowed.extend(s.lineage_json or [])
+    if item.rule_fire:
+        evidence = item.rule_fire.evidence or {}
+        for ev in evidence.get("events") or []:
+            if "citation" in ev:
+                allowed.append(ev["citation"])
+        allowed.extend(evidence.get("lineage") or [])
+    return list(dict.fromkeys(allowed))
+
+
+def _label(metric_id: str | None) -> str:
+    return (metric_id or "metric").replace("_", " ")
+
+
+def _fmt(v: float | None) -> str:
+    if v is None:
+        return "n/a"
+    return f"{v:,.2f}".rstrip("0").rstrip(".")
+
+
+def deterministic_synthesis(item: FilterItem) -> SynthesizeItemOutput:
+    allowed = allowed_citations_for(item)
+    primary = allowed[:1]
+    evidence = allowed[:5]
+
+    if item.rule_fire:
+        rf = item.rule_fire
+        title = f"Red line: {rf.description}"
+        if rf.metric:
+            what = (
+                f"{_label(rf.metric)} is {_fmt(rf.value)} against a red-line threshold of "
+                f"{_fmt(rf.threshold)} for {rf.week}."
+            )
+        else:
+            what = f"{int(rf.value or 0)} open event(s) match the red line '{rf.description}' as of {rf.as_of_date}."
+        why = "This condition is a declared red line, so it is surfaced regardless of weighting."
+        action = "Review the cited evidence and confirm the mitigation owner this week."
+    else:
+        s = item.weighted.mapped.signal  # type: ignore[union-attr]
+        title = f"{_label(s.metric_id).capitalize()} moved to {_fmt(s.value)}"
+        delta = f" ({'+' if (s.delta_wow or 0) >= 0 else ''}{_fmt(s.delta_wow)} week on week)" if s.delta_wow is not None else ""
+        what = f"{_label(s.metric_id).capitalize()} is {_fmt(s.value)} for {s.week}{delta}."
+        why = f"It maps to {', '.join(item.kra_ids) or 'a ranked KRA'} and cleared the surfacing bar under the current weighting."
+        action = "Ask the KRA owner to explain the movement using the cited records."
+
+    connects_text = "; ".join(c.narrative for c in item.connections) or "No cross-KRA connection identified."
+    return SynthesizeItemOutput(
+        title=title,
+        what=SectionBlock(text=what, citations=primary or evidence),
+        why=SectionBlock(text=why, citations=primary or evidence),
+        connects=SectionBlock(text=connects_text, citations=[]),
+        action=SectionBlock(text=action, citations=evidence),
+    )
+
+
+def deterministic_headline(week: str, titles: list[str]) -> str:
+    if not titles:
+        return f"{week}: Nothing met the surfacing bar under current risk appetite."
+    lead = titles[0]
+    more = f" (+{len(titles) - 1} more)" if len(titles) > 1 else ""
+    return f"{week}: {lead}{more}"[:160]

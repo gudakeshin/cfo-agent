@@ -1,4 +1,4 @@
-"""sqlite-vec archival memory store + embedding search."""
+"""Archival memory store + embedding search (sqlite-vec or pgvector via cfo_agent.vectorstore)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DatabaseError, OperationalError
 from sqlalchemy.orm import Session
 
+from cfo_agent import vectorstore as vs
 from cfo_agent.memory.embeddings import embed_query, embed_texts
 from cfo_agent.models import ArchivalMemory
 
@@ -74,10 +75,7 @@ def archival_insert(
     session.add(row)
     session.flush()
 
-    session.execute(
-        text("INSERT INTO archival_vec(archival_id, embedding) VALUES (:id, :emb)"),
-        {"id": row.id, "emb": _vec_literal(emb)},
-    )
+    vs.upsert(session, "archival_vec", row.id, emb)
     session.flush()
     return row
 
@@ -86,10 +84,7 @@ def delete_archival(session: Session, archival_id: int) -> bool:
     row = session.get(ArchivalMemory, archival_id)
     if not row:
         return False
-    session.execute(
-        text("DELETE FROM archival_vec WHERE archival_id = :id"),
-        {"id": archival_id},
-    )
+    vs.delete(session, "archival_vec", archival_id)
     session.delete(row)
     session.flush()
     return True
@@ -105,19 +100,8 @@ def archival_search(
 ) -> list[dict[str, Any]]:
     """Semantic search; optionally filter to entries with week <= as_of_week and scope."""
     qemb = embed_query(query)
-    vec_literal = _vec_literal(qemb)
-
-    sql = text(
-        """
-        SELECT archival_id, distance
-        FROM archival_vec
-        WHERE embedding MATCH :emb
-        ORDER BY distance
-        LIMIT :k
-        """
-    )
     try:
-        rows = session.execute(sql, {"emb": vec_literal, "k": k * 5}).fetchall()
+        rows = vs.knn(session, "archival_vec", qemb, k * 5)
     except (OperationalError, DatabaseError) as e:
         logger.warning("archival_vec KNN failed, falling back to brute-force: %s", e)
         return _brute_force_search(session, qemb, k, as_of_week=as_of_week, scope=scope)
@@ -202,15 +186,10 @@ def check_archival_consistency(session: Session) -> dict[str, int]:
     }
 
     # Orphan vec rows
-    vec_ids = {
-        r[0]
-        for r in session.execute(text("SELECT archival_id FROM archival_vec")).fetchall()
-    }
+    vec_ids = vs.ids(session, "archival_vec")
     orm_ids = {r.id for r in session.query(ArchivalMemory.id).all()}
     for vid in vec_ids - orm_ids:
-        session.execute(
-            text("DELETE FROM archival_vec WHERE archival_id = :id"), {"id": vid}
-        )
+        vs.delete(session, "archival_vec", vid)
         stats["orphan_vec_removed"] += 1
 
     # Missing vec / hash / embedding backfill
@@ -227,12 +206,7 @@ def check_archival_consistency(session: Session) -> dict[str, int]:
         else:
             emb = _bytes_to_emb(row.embedding)
         if row.id not in vec_ids:
-            session.execute(
-                text(
-                    "INSERT INTO archival_vec(archival_id, embedding) VALUES (:id, :emb)"
-                ),
-                {"id": row.id, "emb": _vec_literal(emb)},
-            )
+            vs.upsert(session, "archival_vec", row.id, emb)
             stats["missing_vec_inserted"] += 1
 
     # Chat vec backfill (capped)

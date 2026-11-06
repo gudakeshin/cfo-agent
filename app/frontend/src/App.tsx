@@ -1,4 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom'
+import { api } from './api/client'
+import type { Permission } from './api/types'
+import { ROLE_LABEL, useAuth } from './hooks/useAuth'
 import { AlertBanner } from './components/AlertBanner'
 
 const ICONS = {
@@ -52,23 +55,79 @@ const ICONS = {
   ),
 }
 
+const ICON_BRIEFING = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+    <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
+  </svg>
+)
+const ICON_RUNS = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+    <path d="M4 12a8 8 0 1 0 2.3-5.6M4 4v4h4" />
+  </svg>
+)
+const ICON_GUIDE = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17.5v.01" />
+  </svg>
+)
+
+const ICON_ACTIONS = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+    <rect x="4" y="4" width="16" height="16" rx="2" />
+    <path d="m8 12 3 3 5-6" />
+  </svg>
+)
+const ICON_BRIEFS = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+    <path d="M7 3h10v18l-5-3-5 3V3Z" />
+  </svg>
+)
+
 const NAV_PRIMARY = [
-  { to: '/', label: 'Digest inbox', end: true, icon: ICONS.inbox },
+  { to: '/', label: 'Briefing', end: true, icon: ICON_BRIEFING },
+  { to: '/digests', label: 'All digests', icon: ICONS.inbox },
+  { to: '/actions', label: 'Actions', icon: ICON_ACTIONS },
+  { to: '/briefs', label: 'Meeting briefs', icon: ICON_BRIEFS },
   { to: '/news', label: 'Regulatory feed', icon: ICONS.news },
+  { to: '/feedback', label: 'Feedback log', icon: ICONS.feedback },
+  { to: '/guide', label: 'Guide', icon: ICON_GUIDE },
 ]
 
-const NAV_SECONDARY = [
-  { to: '/weighting', label: 'Weighting', icon: ICONS.weighting },
-  { to: '/kras', label: 'KRA framework', icon: ICONS.kra },
-  { to: '/feedback', label: 'Feedback log', icon: ICONS.feedback },
-  { to: '/connections', label: 'Connections', icon: ICONS.connections },
-  { to: '/data-health', label: 'Data health', icon: ICONS.health },
-  { to: '/memory', label: 'Memory', icon: ICONS.memory },
+const ICON_AUDIT = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+    <path d="M6 3h9l3 3v15H6z" />
+    <path d="M9 10h6M9 14h6M9 18h4" />
+  </svg>
+)
+
+const NAV_SECONDARY: { to: string; label: string; icon: React.ReactNode; perm: Permission }[] = [
+  { to: '/runs', label: 'Digest runs', icon: ICON_RUNS, perm: 'configure' },
+  { to: '/weighting', label: 'Weighting', icon: ICONS.weighting, perm: 'configure' },
+  { to: '/kras', label: 'KRA framework', icon: ICONS.kra, perm: 'configure' },
+  { to: '/metrics', label: 'Metrics', icon: ICON_BRIEFING, perm: 'configure' },
+  { to: '/data-health', label: 'Data health', icon: ICONS.health, perm: 'configure' },
+  { to: '/memory', label: 'Memory', icon: ICONS.memory, perm: 'configure' },
+  { to: '/connections', label: 'Connections', icon: ICONS.connections, perm: 'administer' },
+  { to: '/audit', label: 'Audit log', icon: ICON_AUDIT, perm: 'administer' },
 ]
 
 export default function App() {
+  const { state, can, refresh } = useAuth()
+  const user = state?.user
+  const secondary = NAV_SECONDARY.filter((n) => can(n.perm))
+  const signOut = async () => {
+    try {
+      await api.logout()
+    } finally {
+      refresh()
+    }
+  }
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
       <aside className="sidebar">
         <div className="sidebar-brand">
           <div className="brand-row">
@@ -77,32 +136,48 @@ export default function App() {
           </div>
           <p className="brand-sub">CFO Agentic Intelligence</p>
         </div>
-        <nav>
-          <div className="nav-section-label">Intelligence</div>
+        <nav aria-label="Main">
+          <div className="nav-section-label">For the CFO</div>
           {NAV_PRIMARY.map(({ to, label, end, icon }) => (
             <NavLink
               key={to}
               to={to}
-              end={end}
+              end={end ?? false}
               className={({ isActive }) => (isActive ? 'active' : '')}
             >
               {icon}
               <span>{label}</span>
             </NavLink>
           ))}
-          <div className="nav-section-label nav-section-spaced">Configure</div>
-          {NAV_SECONDARY.map(({ to, label, icon }) => (
+          {secondary.length > 0 && (
+            <div className="nav-section-label nav-section-spaced">Set-up (delegate)</div>
+          )}
+          {secondary.map(({ to, label, icon }) => (
             <NavLink key={to} to={to} className={({ isActive }) => (isActive ? 'active' : '')}>
               {icon}
               <span>{label}</span>
             </NavLink>
           ))}
         </nav>
-        <div className="sidebar-footer">Single-user demo · localhost</div>
+        <div className="sidebar-footer">
+          {state?.auth_mode === 'off' ? (
+            <span>Demo · sign-in off</span>
+          ) : (
+            user && (
+              <div className="user-box">
+                <div className="user-name">{user.name}</div>
+                <div className="user-role">{ROLE_LABEL[user.role]}</div>
+                <button type="button" className="signout" onClick={signOut}>
+                  Sign out
+                </button>
+              </div>
+            )
+          )}
+        </div>
       </aside>
       <div className="main-area">
         <AlertBanner />
-        <main className="main-content">
+        <main className="main-content" id="main" tabIndex={-1}>
           <Outlet />
         </main>
       </div>

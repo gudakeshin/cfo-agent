@@ -336,7 +336,10 @@ def _execute_run(session: Session, run: NewsRefreshRun) -> NewsRefreshRun:
     settings = get_settings()
     try:
         topics = get_topics(session)
-        client = _client()
+        provider = settings.news_effective_provider
+        if provider is None:
+            raise NewsDisabled(news_disabled_reason())
+        client = _client(provider)
         budget = LlmBudget(max_calls=NEWS_MAX_CALLS)
 
         search_user = _build_search_prompt(topics, run.query)
@@ -359,6 +362,7 @@ def _execute_run(session: Session, run: NewsRefreshRun) -> NewsRefreshRun:
             budget=budget,
             max_tokens=4096,
             model=settings.news_model,
+            provider=provider,
         )
 
         kept_items, grounding_dropped = ground_items(batch.items, result_urls)
@@ -413,8 +417,27 @@ def run_news_refresh(run_id: int) -> None:
         session.close()
 
 
+class NewsDisabled(RuntimeError):
+    pass
+
+
+def news_disabled_reason() -> str | None:
+    s = get_settings()
+    if s.news_effective_provider is not None:
+        return None
+    if s.news_provider == "off":
+        return "The regulatory feed is turned off (NEWS_PROVIDER=off)."
+    return (
+        f"Web search for the regulatory feed needs the Anthropic API, but models run on "
+        f"{s.llm_provider}. Set NEWS_PROVIDER=anthropic to search public sources via the "
+        "Anthropic API (only search topics are sent), or NEWS_PROVIDER=off."
+    )
+
+
 def job_news_refresh() -> None:
     """Scheduler entrypoint — tracked-topics refresh, trigger=schedule."""
+    if news_disabled_reason():
+        return
     session = get_session()
     try:
         fetch_news(session, trigger="schedule")

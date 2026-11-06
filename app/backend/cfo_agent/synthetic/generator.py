@@ -13,7 +13,10 @@ import numpy as np
 from sqlalchemy.orm import Session
 
 from cfo_agent.models import (
+    ErpBankAccount,
     ErpCashDaily,
+    ErpEntity,
+    ErpGlEntry,
     ErpCovenant,
     ErpCustomer,
     ErpExpense,
@@ -375,6 +378,9 @@ def generate_erp(
 
     adapter.flush()
 
+    _generate_masters_and_gl(adapter, session, seed=seed, start=start, end_d=end_d)
+    adapter.flush()
+
     counts = {
         "customers": session.query(ErpCustomer).count(),
         "sales_invoices": session.query(ErpSalesInvoice).count(),
@@ -400,6 +406,55 @@ def generate_erp(
         },
     }
     return counts
+
+
+def _generate_masters_and_gl(adapter: SourceAdapter, session: Session, *, seed: int, start: date, end_d: date) -> None:
+    """Entity + bank-account masters and a monthly general ledger summarised from the
+    generated revenue and expenses. Uses its own RNG so the transactional data above
+    is unchanged. Post-close adjustment lines land a few days after each period end,
+    which is what the close-cycle metric measures (it stretches in the last month)."""
+    from sqlalchemy import func
+
+    from cfo_agent.models import ErpExpense as _Exp, ErpRevenueDaily as _Rev
+
+    rng = np.random.default_rng(seed + 7919)
+    adapter.add(ErpEntity(business_key="MAIN", name="Group operating company", functional_currency="INR"))
+    adapter.add(ErpBankAccount(business_key="PRIMARY", entity="MAIN", bank_name="Operating bank",
+                               label="Main current account", currency="INR"))
+    # month ends inside the window
+    months: list[date] = []
+    d = date(start.year, start.month, 1)
+    while d <= end_d:
+        nxt = date(d.year + (d.month == 12), d.month % 12 + 1, 1)
+        months.append(nxt - timedelta(days=1))
+        d = nxt
+    seq = 1
+    for i, pe in enumerate(months):
+        ps = date(pe.year, pe.month, 1)
+        rev = session.query(func.coalesce(func.sum(_Rev.amount_paise), 0)).filter(
+            _Rev.as_of_date >= ps, _Rev.as_of_date <= pe).scalar()
+        opex = session.query(func.coalesce(func.sum(_Exp.amount_paise), 0)).filter(
+            _Exp.expense_date >= ps, _Exp.expense_date <= pe).scalar()
+        if not rev:
+            continue
+        cogs = int(int(rev) * float(rng.uniform(0.58, 0.63)))
+        lines = [
+            ("4000", "Revenue from operations", "revenue", -int(rev), pe),
+            ("5000", "Cost of materials consumed", "cogs", cogs, pe),
+            ("6000", "Operating expenses", "opex", int(opex), pe),
+        ]
+        # Post-close accrual true-ups: 3-5 days after period end, 6-8 in the last month
+        lag = int(rng.integers(6, 9)) if i == len(months) - 1 else int(rng.integers(3, 6))
+        adj_day = pe + timedelta(days=lag)
+        if adj_day <= end_d:
+            lines.append(("6100", "Accrual true-up", "opex", int(int(opex) * 0.01), adj_day))
+        for code, name, typ, amt, posted in lines:
+            adapter.add(ErpGlEntry(
+                business_key=f"GL-{pe.isoformat()}-{seq:04d}", entity="MAIN", posting_date=posted,
+                period_end=pe, account_code=code, account_name=name, account_type=typ,
+                amount_paise=amt, source_ref=f"JV-{pe:%Y%m}",
+            ))
+            seq += 1
 
 
 # Re-export for imports

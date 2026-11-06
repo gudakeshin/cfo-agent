@@ -44,11 +44,17 @@ export interface DigestItem {
   action: string
   kra_ids: string[]
   signal_ids: string[]
-  citations: CitationRef[] | string[]
+  /** API returns per-section lists ({what: [...], why: [...]}); older shapes were flat arrays. */
+  citations: Record<string, string[]> | CitationRef[] | string[]
   is_red_line: boolean
   priority_score: number
-  score_decomp: Record<string, number> | null
+  score_decomp: (Record<string, number | string | null> & { context?: SignalContext }) | null
   relationship_ids: string[]
+  verification?: {
+    unverified_figures?: string[]
+    fallback?: boolean
+    notes?: string[]
+  }
 }
 
 export interface RunAudit {
@@ -113,6 +119,7 @@ export interface WeightingContent {
   risk_appetite: RiskAppetite
   red_lines: RedLine[]
   preferences: Record<string, unknown>
+  kra_multipliers?: Record<string, number>
 }
 
 export interface WeightingResponse {
@@ -240,6 +247,16 @@ export interface CitationDetail {
   citation_id: string
   summary: string
   record: Record<string, unknown> | null
+  /** true when served from the digest's frozen evidence snapshot */
+  snapshot?: boolean
+}
+
+export interface ChatVerification {
+  unverified_figures?: string[]
+  rejected_citations?: string[]
+  uncited?: boolean
+  tools_used?: string[]
+  as_of_week?: string
 }
 
 export interface ChatMessage {
@@ -247,7 +264,16 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   created_at: string
+  citations?: string[]
+  verification?: ChatVerification
 }
+
+export type ChatStreamEvent =
+  | { event: 'delta'; data: { text: string } }
+  | { event: 'reset'; data: Record<string, never> }
+  | { event: 'tool'; data: { name: string; label: string } }
+  | { event: 'done'; data: { message: ChatMessage } }
+  | { event: 'error'; data: { detail: string } }
 
 export interface MemoryBlock {
   name: string
@@ -257,6 +283,7 @@ export interface MemoryBlock {
   editable: boolean
   agent_editable: boolean
   managed_by: 'kra' | 'weighting' | null
+  provenance?: 'cfo-office' | 'model-inferred'
 }
 
 export interface MemoryRevision {
@@ -300,12 +327,14 @@ export interface MaintenanceResult {
 
 // ─── Connectors ─────────────────────────────────────────────────────────────
 
-export type ConnectorAuthType = 'oauth2' | 'basic' | 'api_key'
+export type ConnectorAuthType = 'oauth2' | 'basic' | 'api_key' | 'file' | 'none' | 'db_url'
 
 export interface ConnectorConfigField {
   key: string
   label: string
   secret: boolean
+  multiline?: boolean
+  placeholder?: string
 }
 
 export interface ConnectorConfig {
@@ -323,6 +352,8 @@ export interface ConnectorConfig {
   secret_masked: string | null
   cron: string | null
   watermark_week: string | null
+  watermark?: string | null
+  kind?: 'simulated' | 'file_drop' | 'extractor'
   last_run_at: string | null
   last_status: string
 }
@@ -418,4 +449,110 @@ export interface NewsStatus {
 export interface NewsTopics {
   topics: string[]
   defaults: string[]
+}
+
+// ── CFO read models ──────────────────────────────────────────────────────────
+
+export interface MetricMeta {
+  id: string
+  label: string
+  unit: string
+  adverse_direction: 'up' | 'down' | null
+  custom?: boolean
+  proxy?: boolean
+  description?: string
+}
+
+export interface SignalContext {
+  base_severity?: number
+  anomaly?: { z: number; is_anomaly: boolean }
+  plan?: { plan: number; gap: number; gap_pct: number; adverse: boolean; severity: number; citation: string }
+  covenant?: {
+    name: string; threshold: number; buffer: number; operator: string; headroom: number
+    breached: boolean; in_buffer: boolean; projected_breach_in_weeks: number | null; citation: string
+  }
+  forecast?: { h: number; value: number; low: number; high: number }[]
+}
+
+export interface MetricHistory extends MetricMeta {
+  points: { week: string; value: number | null }[]
+}
+
+export interface BriefingChange {
+  item_id: number
+  title: string
+  is_red_line: boolean
+  rank: number
+}
+
+export interface BriefingKpi extends MetricMeta {
+  value: number | null
+  previous: number | null
+  delta: number | null
+  adverse: boolean | null
+}
+
+export interface Briefing {
+  digest_id: number | null
+  week?: string
+  previous_digest_id?: number | null
+  previous_week?: string | null
+  changes?: { new: BriefingChange[]; continuing: BriefingChange[]; dropped: BriefingChange[] }
+  kpis?: BriefingKpi[]
+}
+
+export interface PreviewRanking {
+  top: (MetricMeta & { score: number; surfaced: boolean })[]
+  red_lines: { rule_id: string; description: string }[]
+  surfaced_count: number
+  empty_bar: boolean
+}
+
+export interface WeightingPreview {
+  week: string
+  active: PreviewRanking
+  draft: PreviewRanking
+}
+
+// ── Auth & audit ─────────────────────────────────────────────────────────────
+
+export type Role = 'viewer' | 'cfo' | 'delegate' | 'admin'
+export type Permission = 'read' | 'interact' | 'configure' | 'administer'
+
+export interface AuthUser {
+  email: string
+  name: string
+  role: Role
+}
+
+export interface AuthState {
+  auth_mode: 'off' | 'local' | 'oidc'
+  demo_mode: boolean
+  user: AuthUser | null
+}
+
+export interface AuditEvent {
+  id: number
+  at: string
+  user: string
+  role: string
+  action: string
+  method: string
+  path: string
+  status: number
+  ip: string | null
+  request_id: string | null
+}
+
+export interface ImportedFileRow {
+  id: number
+  run_id: number | null
+  file: string
+  table: string
+  status: 'loaded' | 'rejected' | 'duplicate'
+  inserted: number
+  updated: number
+  error_count: number
+  errors: { line: number; column: string; error: string }[]
+  imported_at: string
 }

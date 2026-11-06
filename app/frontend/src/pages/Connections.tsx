@@ -58,7 +58,10 @@ export function Connections() {
     <div>
       <header className="page-header">
         <h1>Connections</h1>
-        <p>Simulated ERP/EPM sources feeding the shared dataset seed.</p>
+        <p>
+          Data sources. <strong>File drop (CSV exports)</strong> loads real ERP exports; the other sources are
+          simulated for the demo.
+        </p>
       </header>
 
       <div className="toolbar">

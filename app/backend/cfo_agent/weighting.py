@@ -68,6 +68,22 @@ def validate_weighting(content: dict[str, Any], kra_ids: set[str] | None = None)
     prefs = content.get("preferences") or {}
     if "max_items" in prefs and int(prefs["max_items"]) < 1:
         errors.append("preferences.max_items must be ≥1")
+    if "connect_boost" in prefs:
+        try:
+            cb = float(prefs["connect_boost"])
+            if not 0 <= cb <= 0.5:
+                errors.append("preferences.connect_boost must be between 0 and 0.5")
+        except (TypeError, ValueError):
+            errors.append("preferences.connect_boost must be a number")
+
+    for kid, mult in (content.get("kra_multipliers") or {}).items():
+        if kid not in kra_ids:
+            errors.append(f"kra_multipliers references unknown KRA {kid}")
+        try:
+            if not 0.5 <= float(mult) <= 1.5:
+                errors.append(f"kra_multipliers[{kid}] must be between 0.5 and 1.5")
+        except (TypeError, ValueError):
+            errors.append(f"kra_multipliers[{kid}] must be a number")
 
     if not content.get("label"):
         errors.append("label is required")

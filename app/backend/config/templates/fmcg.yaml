@@ -1,0 +1,68 @@
+template:
+  id: fmcg
+  name: FMCG / consumer products
+  description: Distributor-led Indian consumer business — trade receivables, channel mix, input-cost inflation and A&P discipline.
+  data_needed: [Sales and receipts by distributor, GL with COGS / A&P accounts, cash by bank account, GST]
+version: "1.0.0"
+label: "FMCG — channel, margin and working-capital framework"
+india_regulatory_context: >
+  GST (ITC, e-invoicing, distributor schemes and credit notes), Legal Metrology (MRP), FSSAI,
+  Companies Act board reporting, SEBI LODR for listed entities, Ind AS 115 (variable
+  consideration for trade schemes).
+faces:
+  steward:
+    name: Steward
+    description: Protect cash, comply, report faithfully.
+    kras:
+      - {id: STW-1, name: Distributor receivables discipline, grounding: erp, metrics: [dso_days, ar_overdue_pct, collections_coverage_pct],
+         concerns: [Credit creep with super-stockists ahead of quarter end, Scheme claims settled through credit notes]}
+      - {id: STW-2, name: Liquidity and covenant headroom, grounding: erp, metrics: [cash_balance_cr, covenant_headroom_cr],
+         concerns: [Seasonal inventory build squeezing cash, Covenant headroom in peak season]}
+      - {id: STW-3, name: GST and scheme compliance, grounding: erp, metrics: [gst_open_notices, gst_notice_exposure_cr, itc_at_risk_cr, credit_note_ratio_pct],
+         concerns: [ITC mismatches on distributor credit notes, Show-cause notices on scheme treatment]}
+  operator:
+    name: Operator
+    description: Run an efficient finance and supply engine.
+    kras:
+      - {id: OPR-1, name: Gross margin and input-cost pass-through, grounding: erp, metrics: [gross_margin_pct],
+         concerns: [Commodity inflation not yet priced through, Mix shift to low-margin packs]}
+      - {id: OPR-2, name: Overheads and A&P discipline, grounding: erp, metrics: [opex_ratio_pct, cost_center_variance_pct],
+         concerns: [A&P overspend without volume response, Overhead creep]}
+      - {id: OPR-3, name: Vendor payments, grounding: erp, metrics: [dpo_days, ap_overdue_pct],
+         concerns: [MSME 45-day payment rule (Sec 43B(h)), Packaging supplier stress]}
+      - {id: OPR-4, name: Close and reconciliation, grounding: erp, metrics: [close_cycle_days, unreconciled_items],
+         concerns: [Scheme accrual true-ups delaying close]}
+  strategist:
+    name: Strategist
+    description: Allocate capital to brands and channels.
+    kras:
+      - {id: STR-1, name: Channel and brand growth, grounding: erp, metrics: [segment_revenue_growth_pct, revenue_week_cr, revenue_concentration_pct],
+         concerns: [Quick-commerce growth cannibalising general trade, Dependence on one channel]}
+      - {id: STR-2, name: Cash generation, grounding: erp, metrics: [free_cash_flow_cr, cash_balance_cr],
+         concerns: [Working capital absorbing growth]}
+      - {id: STR-3, name: Export and FX exposure, grounding: erp, metrics: [export_revenue_share_pct],
+         concerns: [Unhedged export receivables]}
+  catalyst:
+    name: Catalyst
+    description: Improve decisions across the business.
+    kras:
+      - {id: CAT-1, name: Board and investor narrative, grounding: erp, metrics: [board_pack_readiness_score],
+         concerns: [Volume vs value growth story consistency]}
+      - {id: CAT-2, name: Sales-finance partnership, grounding: none, metrics: [], concerns: [Scheme ROI not reviewed with sales], note: "Needs scheme ROI data"}
+relationships:
+  - {id: REL-1, from: STW-1, to: STR-2, description: "Distributor credit stretch absorbs the cash that growth should generate"}
+  - {id: REL-2, from: OPR-1, to: STR-1, description: "Margin pressure limits the A&P that funds channel growth"}
+  - {id: REL-3, from: STW-3, to: OPR-1, description: "Scheme credit notes and GST treatment move reported gross margin"}
+  - {id: REL-4, from: OPR-2, to: STR-2, description: "A&P and overhead overruns cut free cash flow"}
+  - {id: REL-5, from: STR-1, to: STW-1, description: "Channel growth pushed through credit inflates DSO"}
+  - {id: REL-6, from: STW-2, to: STR-2, description: "Seasonal cash squeeze constrains capital deployment"}
+weighting_preset:
+  label: "FMCG — margin and cash in peak season"
+  defining_priority: Protect gross margin through input-cost inflation while keeping distributor credit in check.
+  face_weights: {steward: 0.3, operator: 0.35, strategist: 0.25, catalyst: 0.1}
+  kra_ranks: [OPR-1, STW-1, STR-1, STW-2, OPR-2, STW-3]
+  risk_appetite: moderate
+  red_lines:
+    - {id: RL-1, type: level, metric: cash_balance_cr, operator: lt, threshold: 22.0, description: "Cash below buffered covenant"}
+    - {id: RL-2, type: event, trigger: on_new_record, table: erp_gst_events, event_type: show_cause_notice, description: "Any new GST show-cause notice"}
+  preferences: {max_items: 7, depth: standard, cadence: "Monday 08:00 IST", channel: in_app_and_email}

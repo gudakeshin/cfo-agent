@@ -1,6 +1,14 @@
 import type {
   Alert,
+  AuditEvent,
+  AuthState,
+  AuthUser,
+  Briefing,
+  MetricHistory,
+  MetricMeta,
+  WeightingPreview,
   ChatMessage,
+  ChatStreamEvent,
   CitationDetail,
   ConnectorConfig,
   ConnectorsListResponse,
@@ -8,6 +16,7 @@ import type {
   ConnectorSyncRun,
   ConnectorSyncStartResponse,
   ConnectorTestResult,
+  ImportedFileRow,
   ConsolidationRun,
   DataHealth,
   DigestDetail,
@@ -36,11 +45,15 @@ import type {
 
 const BASE = '/api'
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
     ...init,
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch', ...init?.headers },
   })
+  if (res.status === 401 && !path.startsWith('/auth/')) {
+    window.dispatchEvent(new Event('cfo:unauthorized'))
+  }
   if (!res.ok) {
     let detail = res.statusText
     try {
@@ -53,6 +66,55 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
+}
+
+/** POST a question and read the server-sent event stream until it ends. */
+async function streamChat(
+  itemId: number,
+  message: string,
+  onEvent: (e: ChatStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${BASE}/chat/${itemId}/stream`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' },
+    body: JSON.stringify({ message }),
+    signal,
+  })
+  if (!res.ok || !res.body) {
+    let detail = res.statusText
+    try {
+      detail = (await res.json()).detail ?? detail
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail)
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let idx: number
+    while ((idx = buffer.indexOf('\n\n')) >= 0) {
+      const raw = buffer.slice(0, idx)
+      buffer = buffer.slice(idx + 2)
+      let event = 'message'
+      let data = ''
+      for (const line of raw.split('\n')) {
+        if (line.startsWith('event: ')) event = line.slice(7)
+        else if (line.startsWith('data: ')) data += line.slice(6)
+      }
+      try {
+        onEvent({ event, data: data ? JSON.parse(data) : {} } as ChatStreamEvent)
+      } catch {
+        /* ignore malformed frame */
+      }
+    }
+  }
 }
 
 export const api = {
@@ -123,6 +185,7 @@ export const api = {
 
   // Chat
   getChat: (itemId: number) => request<ChatMessage[]>(`/chat/${itemId}`),
+  streamChat,
   postChat: (itemId: number, message: string) =>
     request<ChatMessage>(`/chat/${itemId}`, {
       method: 'POST',
@@ -130,8 +193,11 @@ export const api = {
     }),
 
   // Citations
-  getCitation: (cid: string) =>
-    request<CitationDetail>(`/citations/${encodeURIComponent(cid)}`),
+  getCitation: (cid: string, digestItemId?: number) =>
+    request<CitationDetail>(
+      `/citations/${encodeURIComponent(cid)}` +
+        (digestItemId != null ? `?digest_item_id=${digestItemId}` : ''),
+    ),
 
   // Alerts
   listAlerts: (active?: boolean) =>
@@ -194,6 +260,36 @@ export const api = {
     request<ConnectorSyncRun[]>(
       `/connectors/${encodeURIComponent(id)}/runs?limit=${limit}`,
     ),
+
+  // Auth
+  getMe: () => request<AuthState>('/auth/me'),
+  login: (email: string, password: string) =>
+    request<{ user: AuthUser }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  logout: () => request<{ ok: boolean }>('/auth/logout', { method: 'POST' }),
+  listAudit: (opts?: { action?: string; user?: string }) => {
+    const params = new URLSearchParams()
+    if (opts?.action) params.set('action', opts.action)
+    if (opts?.user) params.set('user', opts.user)
+    const qs = params.toString()
+    return request<AuditEvent[]>(`/audit${qs ? `?${qs}` : ''}`)
+  },
+
+  // CFO read models
+  getBriefing: () => request<Briefing>('/briefing'),
+  listMetrics: () => request<MetricMeta[]>('/metrics'),
+  getSignalHistory: (metrics: string[], until?: string, n = 13) =>
+    request<Record<string, MetricHistory>>(
+      `/signals/history?metrics=${encodeURIComponent(metrics.join(','))}&n=${n}` +
+        (until ? `&until=${encodeURIComponent(until)}` : ''),
+    ),
+  previewWeighting: (content: WeightingContent, week?: string) =>
+    request<WeightingPreview>('/weighting/preview', {
+      method: 'POST',
+      body: JSON.stringify({ content, week }),
+    }),
+
+  listConnectorImports: (id: string) =>
+    request<ImportedFileRow[]>(`/connectors/${encodeURIComponent(id)}/imports`),
 
   // Regulatory news
   listNews: (opts?: { category?: string; since?: string; limit?: number }) => {

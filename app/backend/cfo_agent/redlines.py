@@ -63,8 +63,11 @@ def evaluate_rules(
 ) -> list[RuleFire]:
     """Evaluate level + event rules as of a date. Event rules fire on delta since last_check."""
     week = iso_week_id(as_of)
-    # Clamp: do not evaluate beyond replay clock week end if set
-    clock = get_replay_clock_week(session)
+    # Replay (demo) mode: do not evaluate beyond the replay clock week, so the
+    # synthetic quarter's "future" weeks never leak. Live mode has no clamp.
+    from cfo_agent.settings import get_settings
+
+    clock = get_replay_clock_week(session) if get_settings().data_mode != "live" else None
     if clock:
         clock_end = week_sunday(clock)
         if as_of > clock_end:
@@ -83,7 +86,7 @@ def evaluate_rules(
             mr = fn(session, week)
             op = OPS[rule["operator"]]
             thr = float(rule["threshold"])
-            if op(mr.value, thr):
+            if mr.available and op(mr.value, thr):
                 fires.append(
                     RuleFire(
                         rule_id=rid,
@@ -193,6 +196,8 @@ def close_cleared_episodes(session: Session, rules: list[dict], as_of: date) -> 
         if not fn:
             continue
         mr = fn(session, week)
+        if not mr.available:
+            continue  # unknown ≠ cleared; keep the episode open
         op = OPS[rule["operator"]]
         still = op(mr.value, float(rule["threshold"]))
         if still:

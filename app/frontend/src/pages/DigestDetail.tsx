@@ -2,65 +2,43 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../api/client'
+import type { DigestItem } from '../api/types'
 import { DataHealthBanner } from '../components/DataHealthBanner'
-import { DrilldownChat } from '../components/DrilldownChat'
-import { InsightCard } from '../components/InsightCard'
+import { DigestItems } from '../components/DigestItems'
+import { ExportShare } from '../components/ExportShare'
+import { useAuth } from '../hooks/useAuth'
 import { formatWeekLabel } from '../utils/weeks'
 
-function ScoreDecomp({ decomp }: { decomp: Record<string, number> }) {
-  const face = decomp.face_weight
-  const rank = decomp.rank_boost
-  const sev = decomp.severity
-  const product =
-    typeof face === 'number' && typeof rank === 'number' && typeof sev === 'number'
-      ? face * rank * sev
-      : null
+interface Suppressed {
+  title?: string
+  reason?: string
+  detail?: string
+}
 
+const REASON_LABEL: Record<string, string> = {
+  uncitable: 'Cited evidence that does not support it',
+  no_citations: 'No evidence cited',
+}
+
+function ScoreRow({ item }: { item: DigestItem }) {
+  const d = (item.score_decomp ?? {}) as Record<string, number | string>
+  const n = (k: string) => (typeof d[k] === 'number' ? (d[k] as number).toFixed(2) : '—')
   return (
-    <dl className="score-decomp">
-      {typeof face === 'number' && (
-        <div>
-          <dt>face_weight</dt>
-          <dd>{face.toFixed(3)}</dd>
-        </div>
-      )}
-      {typeof rank === 'number' && (
-        <div>
-          <dt>rank_boost</dt>
-          <dd>{rank.toFixed(3)}</dd>
-        </div>
-      )}
-      {typeof sev === 'number' && (
-        <div>
-          <dt>severity</dt>
-          <dd>{sev.toFixed(3)}</dd>
-        </div>
-      )}
-      {product !== null && (
-        <div className="score-product">
-          <dt>product</dt>
-          <dd>
-            {face.toFixed(3)} × {rank.toFixed(3)} × {sev.toFixed(3)} = {product.toFixed(3)}
-          </dd>
-        </div>
-      )}
-      {Object.entries(decomp)
-        .filter(([k]) => !['face_weight', 'rank_boost', 'severity'].includes(k))
-        .map(([k, v]) => (
-          <div key={k}>
-            <dt>{k}</dt>
-            <dd>{typeof v === 'number' ? v.toFixed(3) : String(v)}</dd>
-          </div>
-        ))}
-    </dl>
+    <tr>
+      <td>#{item.rank}</td>
+      <td>{item.title}</td>
+      <td>{item.is_red_line ? 'Red line' : `${n('face_weight')} × ${n('rank_boost')} × ${n('severity')}`}</td>
+      <td>{item.is_red_line ? '—' : item.priority_score.toFixed(2)}</td>
+    </tr>
   )
 }
 
 export function DigestDetail() {
   const { id } = useParams<{ id: string }>()
   const digestId = Number(id)
-  const [chatItem, setChatItem] = useState<{ id: number; title: string } | null>(null)
   const queryClient = useQueryClient()
+  const [confirmEmail, setConfirmEmail] = useState(false)
+  const { can } = useAuth()
 
   const { data: digest, isLoading, error } = useQuery({
     queryKey: ['digest', digestId],
@@ -68,148 +46,121 @@ export function DigestDetail() {
     enabled: Number.isFinite(digestId),
   })
 
-  const { data: feedbackLog } = useQuery({
-    queryKey: ['feedback'],
-    queryFn: api.listFeedback,
-  })
-
   const resendMutation = useMutation({
     mutationFn: () => api.resendDigestEmail(digestId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['digest', digestId] }),
+    onSuccess: () => {
+      setConfirmEmail(false)
+      queryClient.invalidateQueries({ queryKey: ['digest', digestId] })
+    },
   })
-
-  const feedbackByItem = new Map(
-    feedbackLog?.items.map((f) => [f.digest_item_id, f]) ?? [],
-  )
 
   if (isLoading) return <p className="empty-state">Loading digest…</p>
   if (error) return <p className="error-text">{(error as Error).message}</p>
   if (!digest) return <p className="empty-state">Digest not found.</p>
 
   const audit = digest.run_audit
-
-  const emailOk =
-    digest.email_status === 'sent' ||
-    digest.email_status === 'outbox' ||
-    digest.email_status === 'written'
+  const suppressed = (audit?.suppressed ?? []) as Suppressed[]
+  const usage = (audit?.token_usage ?? {}) as { calls?: number; degraded_steps?: string[] }
+  const emailOk = ['sent', 'outbox', 'written'].includes(digest.email_status)
 
   return (
     <div>
-      <Link to="/" className="back-link">
-        ← Digest inbox
+      <Link to="/digests" className="back-link no-print">
+        ← All digests
       </Link>
-      <header className="page-header" style={{ marginBottom: 8 }}>
-        <h1>{digest.headline}</h1>
-        <p style={{ marginBottom: 14 }}>
-          {formatWeekLabel(digest.week)} · {digest.weighting_label}
-          {digest.empty_bar && ' · Empty bar week'}
-        </p>
-      </header>
-
-      <div className="email-status-row">
-        <span>
-          Email delivery:{' '}
-          <strong className={emailOk ? 'status-ok' : undefined}>{digest.email_status}</strong>
-          {digest.email_path && (
-            <>
-              {' '}
-              · outbox <code>{digest.email_path.split('/').pop()}</code>
-            </>
+      <header className="page-header briefing-header">
+        <div>
+          <p className="eyebrow">
+            {formatWeekLabel(digest.week)} · lens: {digest.weighting_label}
+          </p>
+          <h1>{digest.headline}</h1>
+        </div>
+        <div className="header-actions no-print">
+          <ExportShare digestId={digest.id} />
+          {!can('configure') ? null : !confirmEmail ? (
+            <button type="button" onClick={() => setConfirmEmail(true)}>
+              Email again…
+            </button>
+          ) : (
+            <span className="inline-confirm" role="group" aria-label="Confirm email">
+              Send this digest by email again?
+              <button
+                type="button"
+                className="primary"
+                onClick={() => resendMutation.mutate()}
+                disabled={resendMutation.isPending}
+              >
+                {resendMutation.isPending ? 'Sending…' : 'Send'}
+              </button>
+              <button type="button" onClick={() => setConfirmEmail(false)}>
+                Cancel
+              </button>
+            </span>
           )}
-        </span>
-        <button
-          type="button"
-          style={{ marginLeft: 'auto' }}
-          onClick={() => resendMutation.mutate()}
-          disabled={resendMutation.isPending}
-        >
-          {resendMutation.isPending ? 'Sending…' : 'Resend email'}
-        </button>
-        {resendMutation.isError && (
-          <span className="error-text">{(resendMutation.error as Error).message}</span>
-        )}
-        {resendMutation.isSuccess && (
-          <span className="success-text">
-            {resendMutation.data.email_status}
-            {resendMutation.data.email_path ? ` → ${resendMutation.data.email_path}` : ''}
-          </span>
-        )}
-      </div>
+        </div>
+      </header>
+      <p className="email-line no-print">
+        Email: <strong className={emailOk ? 'status-ok' : undefined}>{digest.email_status}</strong>
+        {resendMutation.isSuccess && <span className="success-text"> · sent again</span>}
+        {resendMutation.isError && <span className="error-text"> · {(resendMutation.error as Error).message}</span>}
+      </p>
 
       <DataHealthBanner health={digest.data_health} />
+      <DigestItems digest={digest} />
 
-      {digest.items.length === 0 ? (
-        <p className="empty-state">No insights surfaced for this week.</p>
-      ) : (
-        <div className="insight-list">
-          {digest.items.map((item) => (
-            <InsightCard
-              key={item.id}
-              item={item}
-              feedback={feedbackByItem.get(item.id)}
-              onFeedbackChange={() => queryClient.invalidateQueries({ queryKey: ['feedback'] })}
-              onDrilldown={() => setChatItem({ id: item.id, title: item.title })}
-            />
-          ))}
-        </div>
-      )}
-
-      {audit && (
-        <details className="audit-panel">
-          <summary>Run audit · #{audit.run_id}</summary>
+      {audit && can('configure') && (
+        <details className="audit-panel no-print">
+          <summary>How this digest was built (for the delegate)</summary>
           <div className="audit-body">
-            <dl className="audit-grid">
-              <div>
-                <dt>Cost</dt>
-                <dd>${audit.cost_usd.toFixed(4)}</dd>
-              </div>
-              {Object.entries(audit.step_timings ?? {}).map(([step, ms]) => (
-                <div key={step}>
-                  <dt>{step}</dt>
-                  <dd>{ms}ms</dd>
-                </div>
-              ))}
-            </dl>
+            <p>
+              Run #{audit.run_id} · {usage.calls ?? '—'} AI calls · ${audit.cost_usd.toFixed(2)}
+              {usage.degraded_steps?.length
+                ? ` · AI budget ran out; system-written text used for: ${usage.degraded_steps.join(', ')}`
+                : ''}
+            </p>
 
-            {audit.suppressed && audit.suppressed.length > 0 && (
-              <>
-                <h4>Suppressed ({audit.suppressed.length})</h4>
-                <pre>{JSON.stringify(audit.suppressed, null, 2)}</pre>
-              </>
+            <h4>Why each item ranked where it did</h4>
+            <p className="verification-note">
+              Priority = face weight × KRA rank boost × severity of the move. Red lines skip the ranking.
+            </p>
+            <table className="audit-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Item</th>
+                  <th>Face × rank × severity</th>
+                  <th>Priority</th>
+                </tr>
+              </thead>
+              <tbody>
+                {digest.items.map((i) => (
+                  <ScoreRow key={i.id} item={i} />
+                ))}
+              </tbody>
+            </table>
+
+            <h4>Held back ({suppressed.length})</h4>
+            {suppressed.length === 0 ? (
+              <p className="verification-note">Nothing was held back — every drafted item passed the evidence check.</p>
+            ) : (
+              <ul className="suppressed-list">
+                {suppressed.map((s, i) => (
+                  <li key={i}>
+                    <strong>{s.title ?? 'Untitled'}</strong> — {REASON_LABEL[s.reason ?? ''] ?? s.reason}
+                    {s.detail && <div className="verification-note">{s.detail}</div>}
+                  </li>
+                ))}
+              </ul>
             )}
 
-            {digest.items.some((i) => i.score_decomp) && (
-              <>
-                <h4>Score decomposition</h4>
-                {digest.items
-                  .filter((i) => i.score_decomp)
-                  .map((i) => (
-                    <details key={i.id} style={{ marginBottom: '0.5rem' }}>
-                      <summary>
-                        #{i.rank} {i.title}
-                      </summary>
-                      <ScoreDecomp decomp={i.score_decomp as Record<string, number>} />
-                    </details>
-                  ))}
-              </>
-            )}
-
-            {audit.token_usage && Object.keys(audit.token_usage).length > 0 && (
-              <>
-                <h4>Token usage</h4>
-                <pre>{JSON.stringify(audit.token_usage, null, 2)}</pre>
-              </>
-            )}
+            <h4>Step timings</h4>
+            <p className="verification-note">
+              {Object.entries(audit.step_timings ?? {})
+                .map(([step, ms]) => `${step} ${(ms / 1000).toFixed(1)}s`)
+                .join(' · ')}
+            </p>
           </div>
         </details>
-      )}
-
-      {chatItem && (
-        <DrilldownChat
-          itemId={chatItem.id}
-          itemTitle={chatItem.title}
-          onClose={() => setChatItem(null)}
-        />
       )}
     </div>
   )

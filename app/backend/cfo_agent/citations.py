@@ -8,7 +8,13 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from cfo_agent.models import (
+    ErpBankAccount,
     ErpCashDaily,
+    ErpCreditNote,
+    ErpEntity,
+    ErpFxRate,
+    ErpGlEntry,
+    ErpPlanMetric,
     ErpCovenant,
     ErpCustomer,
     ErpExpense,
@@ -33,6 +39,12 @@ TABLE_MODEL = {
     "erp_revenue_daily": ErpRevenueDaily,
     "erp_gst_events": ErpGstEvent,
     "erp_covenants": ErpCovenant,
+    "erp_credit_notes": ErpCreditNote,
+    "erp_gl_entries": ErpGlEntry,
+    "erp_bank_accounts": ErpBankAccount,
+    "erp_fx_rates": ErpFxRate,
+    "erp_entities": ErpEntity,
+    "erp_plan_metrics": ErpPlanMetric,
 }
 
 
@@ -91,7 +103,11 @@ def resolve_citation(session: Session, cid: str) -> ResolvedCitation:
                 return ResolvedCitation(
                     cid, False, "", error=f"Lineage broken: {lid} — {r.error}"
                 )
-        summary = f"{metric_id} @ {week} = {sig.value} (Δ {sig.delta_wow})"
+        from cfo_agent.signals import metric_meta
+
+        label = metric_meta(metric_id)["label"]
+        delta = "" if sig.delta_wow is None else f" (Δ {sig.delta_wow:+.2f})"
+        summary = f"{label} · {week} = {sig.value:,.2f}{delta}"
         return ResolvedCitation(
             cid,
             True,
@@ -133,21 +149,96 @@ def _summarize_erp(session: Session, table: str, row: Any) -> tuple[str, dict]:
         summary = (
             f"{row.business_key} · {row.cost_center} · {format_inr(row.amount_paise)} · {row.expense_date}"
         )
+    elif table == "erp_credit_notes":
+        summary = f"{row.business_key} · credit note {format_inr(row.amount_paise)} · {row.note_date}"
+    elif table == "erp_gl_entries":
+        summary = (f"{row.business_key} · {row.account_code} {row.account_name} · "
+                   f"{format_inr(row.amount_paise)} · posted {row.posting_date} for {row.period_end}")
+    elif table == "erp_plan_metrics":
+        summary = f"{row.business_key} · plan {row.metric_id} {row.value:g} · {row.week}"
+    elif table == "erp_covenants":
+        summary = f"{row.business_key} · {row.name} · threshold {format_inr(row.threshold_paise)}"
+    elif table == "erp_purchase_invoices":
+        summary = f"{row.business_key} · {row.vendor_name} · {format_inr(row.amount_paise)} · due {row.due_date}"
     else:
         summary = f"{row.business_key}"
+    if getattr(row, "currency", "INR") not in (None, "INR"):
+        summary += f" · {row.currency} @ {row.fx_rate:g}"
     return summary, data
 
 
 def gate_citations(
     session: Session,
     citations: list[str],
+    allowed: set[str] | list[str] | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Return (ok_ids, bad_ids)."""
+    """Return (ok_ids, bad_ids). With `allowed`, IDs outside the set are bad even if they resolve."""
     ok, bad = [], []
+    allowed_set = set(allowed) if allowed is not None else None
     for cid in citations:
+        if allowed_set is not None and cid not in allowed_set:
+            bad.append(cid)
+            continue
         r = resolve_citation(session, cid)
         (ok if r.ok else bad).append(cid)
     return ok, bad
+
+
+def citation_error(session: Session, cid: str, allowed: set[str] | list[str] | None = None) -> str:
+    if allowed is not None and cid not in set(allowed):
+        return "Not in ALLOWED_CITATIONS for this item"
+    return resolve_citation(session, cid).error or "unresolvable"
+
+
+# ── Figure verification ──────────────────────────────────────────────────────
+import re  # noqa: E402
+
+_NUM_RE = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?")
+_SKIP_RE = re.compile(r"\b\d{4}-W\d{1,2}\b|\bW\d{1,2}\b|\b\d{4}-\d{2}-\d{2}\b|\b[A-Z]{2,}-\d+\b")
+
+
+def _numeric_values(obj: Any, out: list[float]) -> None:
+    if isinstance(obj, bool):
+        return
+    if isinstance(obj, (int, float)):
+        out.append(float(obj))
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            _numeric_values(v, out)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            _numeric_values(v, out)
+
+
+def known_figures(values: list[float]) -> list[float]:
+    """Expand raw values into the forms a narrative may use (paise→Cr/L/₹, abs)."""
+    out: list[float] = []
+    for v in values:
+        out.extend([v, abs(v)])
+        if abs(v) >= 10_000:  # plausibly paise
+            out.extend([abs(v) / 1e9, abs(v) / 1e7, abs(v) / 100])
+    return out
+
+
+def unverified_figures(texts: list[str], known: list[float], *, rel_tol: float = 0.02) -> list[str]:
+    """Numbers in `texts` that match no known figure (within rounding). Years, dates,
+    week IDs, document keys and integers ≤ 10 are ignored."""
+    flagged: list[str] = []
+    for text in texts:
+        cleaned = _SKIP_RE.sub(" ", text or "")
+        for m in _NUM_RE.finditer(cleaned):
+            raw = m.group(0)
+            try:
+                n = abs(float(raw.replace(",", "")))
+            except ValueError:
+                continue
+            if "." not in raw and (n <= 10 or 1990 <= n <= 2100):
+                continue
+            decimals = len(raw.split(".")[1]) if "." in raw else 0
+            round_tol = 0.5 * 10 ** (-decimals)
+            if not any(abs(n - k) <= max(round_tol, rel_tol * abs(k)) for k in known):
+                flagged.append(raw)
+    return list(dict.fromkeys(flagged))
 
 
 def collect_item_citations(sections: dict[str, Any]) -> list[str]:

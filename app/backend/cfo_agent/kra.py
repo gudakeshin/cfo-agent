@@ -14,6 +14,10 @@ from cfo_agent.settings import CONFIG_DIR
 
 logger = logging.getLogger(__name__)
 
+class FrameworkError(ValueError):
+    """A KRA framework failed validation; the message is safe to show to users."""
+
+
 GROUNDED = "erp"
 UNGROUNDED = "none"
 
@@ -79,7 +83,7 @@ def parse_framework(data: dict[str, Any]) -> KraFramework:
         for k in face_data.get("kras", []):
             kid = k["id"]
             if kid in kras:
-                raise ValueError(f"Duplicate KRA id: {kid}")
+                raise FrameworkError(f"Duplicate KRA id: {kid}")
             kras[kid] = KRA(
                 id=kid,
                 name=k["name"],
@@ -123,9 +127,14 @@ def parse_framework(data: dict[str, Any]) -> KraFramework:
     )
 
 
-def validate_framework_hard(fw: KraFramework) -> list[str]:
+def validate_framework_hard(fw: KraFramework, session: Session | None = None) -> list[str]:
     """Hard errors → 422. Soft count floors are separate."""
     from cfo_agent.signals import SIGNAL_REGISTRY
+
+    if session is not None:
+        from cfo_agent.metrics_dsl import ensure_custom_metrics
+
+        ensure_custom_metrics(session)  # declarative metrics count as known metrics
 
     errors: list[str] = []
     kra_ids = fw.kra_ids()
@@ -233,7 +242,7 @@ def upsert_kra_version(session: Session, path: Path | None = None) -> KraVersion
     yaml_text = path.read_text(encoding="utf-8")
     data = yaml.safe_load(yaml_text)
     fw = parse_framework(data)
-    errs = validate_framework_hard(fw)
+    errs = validate_framework_hard(fw, session)
     if errs:
         raise ValueError("Invalid KRA framework: " + "; ".join(errs))
 
@@ -338,10 +347,15 @@ def create_kra_version(
     """
     from cfo_agent.memory.blocks import set_block_content
 
-    fw = parse_framework(data)
-    hard = validate_framework_hard(fw)
+    try:
+        fw = parse_framework(data)
+    except FrameworkError:
+        raise
+    except (KeyError, TypeError, AttributeError) as e:
+        raise FrameworkError(f"Framework is missing a required field ({type(e).__name__}: {e})") from None
+    hard = validate_framework_hard(fw, session)
     if hard:
-        raise ValueError("; ".join(hard))
+        raise FrameworkError("; ".join(hard))
     warnings = validate_framework_soft(fw)
 
     # Rebuild serializable dict with server-side metric_map

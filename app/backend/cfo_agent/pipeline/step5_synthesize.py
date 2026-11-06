@@ -13,6 +13,23 @@ from cfo_agent.pipeline.step4_filter import FilterItem
 from cfo_agent.weighting import weighting_to_prompt_block
 
 
+def _with_display_amounts(obj):
+    """Add a pre-formatted ₹ string next to every *_paise field so the model never
+    converts paise itself (it got a ₹3.2 Cr notice wrong by 10× doing so)."""
+    from cfo_agent.timeutil import format_inr
+
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            out[k] = _with_display_amounts(v)
+            if k.endswith("_paise") and isinstance(v, (int, float)):
+                out[k.removesuffix("_paise") + "_inr"] = format_inr(int(v))
+        return out
+    if isinstance(obj, list):
+        return [_with_display_amounts(v) for v in obj]
+    return obj
+
+
 def step5_synthesize_item(
     session: Session,
     item: FilterItem,
@@ -22,13 +39,13 @@ def step5_synthesize_item(
     budget: LlmBudget,
     repair_errors: dict[str, str] | None = None,
 ) -> SynthesizeItemOutput:
-    allowed_cites: list[str] = []
+    from cfo_agent.pipeline.fallback import allowed_citations_for
+
+    allowed_cites = allowed_citations_for(item)
     payload: dict = {"week": week, "is_red_line": item.is_red_line}
 
     if item.weighted:
         s = item.weighted.mapped.signal
-        allowed_cites.append(s.signal_id)
-        allowed_cites.extend(s.lineage_json or [])
         payload["signal"] = {
             "signal_id": s.signal_id,
             "metric_id": s.metric_id,
@@ -44,13 +61,8 @@ def step5_synthesize_item(
             "description": item.rule_fire.description,
             "value": item.rule_fire.value,
             "threshold": item.rule_fire.threshold,
-            "evidence": item.rule_fire.evidence,
+            "evidence": _with_display_amounts(item.rule_fire.evidence),
         }
-        for ev in (item.rule_fire.evidence or {}).get("events") or []:
-            if "citation" in ev:
-                allowed_cites.append(ev["citation"])
-        for lid in (item.rule_fire.evidence or {}).get("lineage") or []:
-            allowed_cites.append(lid)
 
     if item.connections:
         payload["connections"] = [c.model_dump() for c in item.connections]
@@ -62,14 +74,13 @@ def step5_synthesize_item(
     past = archival_search(session, str(query), k=3, as_of_week=week)
     payload["past_insights"] = past
 
-    allowed_cites = list(dict.fromkeys(allowed_cites))
     system = [
         cached_system_block(
             framework_to_prompt_block(framework)
             + "\n\n"
             + weighting_to_prompt_block(weighting)
         ),
-        {"type": "text", "text": render_blocks_for_prompt(session)},
+        {"type": "text", "text": render_blocks_for_prompt(session, skip_managed=True)},
     ]
     repair_note = ""
     if repair_errors:
@@ -81,7 +92,10 @@ def step5_synthesize_item(
     user = (
         "Synthesize one digest item for the CFO. "
         "Every factual claim must cite only from ALLOWED_CITATIONS. "
-        "Structure: title, what, why, connects, action — each with citations[]. "
+        "Structure: title, what, why, connects, action — each with citations[]; "
+        "'what' and 'why' MUST each carry at least one citation. "
+        "Only state figures that appear in ITEM (or in the cited records); do not derive new numbers. "
+        "For money, quote the *_inr fields verbatim; never convert *_paise values yourself. "
         "If past_insights exist, reference continuity briefly.\n\n"
         f"ALLOWED_CITATIONS: {json.dumps(allowed_cites)}\n\n"
         f"ITEM:\n{json.dumps(payload, indent=2, default=str)}"

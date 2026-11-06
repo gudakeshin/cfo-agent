@@ -3,10 +3,11 @@ from __future__ import annotations
 import time
 from datetime import datetime
 
+from cfo_agent.security import ConfigError, decrypt_secret, encrypt_secret
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 
-from cfo_agent.connectors.catalog import CONNECTORS, ConnectorDef, get_connector
+from cfo_agent.connectors.catalog import EXTRACTOR_IDS, CONNECTORS, ConnectorDef, get_connector
 from cfo_agent.connectors.sync import get_erp_seed, run_connector_sync, scheduled_connector_sync
 from cfo_agent.db import get_session
 from cfo_agent.models import ConnectorConfig, ConnectorSyncRun
@@ -30,7 +31,13 @@ def _get_catalog_or_404(connector_id: str) -> ConnectorDef:
         raise HTTPException(404, detail=f"Unknown connector {connector_id}") from None
 
 
-def _mask_secret(secret: str | None) -> str | None:
+def _mask_secret(stored: str | None) -> str | None:
+    if not stored:
+        return None
+    try:
+        secret = decrypt_secret(stored)
+    except ConfigError:
+        return "•••• (cannot decrypt — re-enter)"
     if not secret:
         return None
     tail = secret[-4:] if len(secret) >= 4 else secret
@@ -47,7 +54,8 @@ def _connector_view(catalog: ConnectorDef, cfg: ConnectorConfig) -> dict:
         "brand_color": catalog.brand_color,
         "owned_tables": [m.__tablename__ for m in catalog.owned_models],
         "config_fields": [
-            {"key": f.key, "label": f.label, "secret": f.secret} for f in catalog.config_fields
+            {"key": f.key, "label": f.label, "secret": f.secret, "multiline": f.multiline,
+             "placeholder": f.placeholder} for f in catalog.config_fields
         ],
         "enabled": cfg.enabled,
         "config": cfg.config_json or {},
@@ -55,6 +63,8 @@ def _connector_view(catalog: ConnectorDef, cfg: ConnectorConfig) -> dict:
         "secret_masked": _mask_secret(cfg.secret),
         "cron": cfg.cron,
         "watermark_week": cfg.watermark_week,
+        "watermark": cfg.watermark,
+        "kind": "simulated" if catalog.simulated else ("extractor" if catalog.id in EXTRACTOR_IDS else "file_drop"),
         "last_run_at": cfg.last_run_at,
         "last_status": cfg.last_status,
     }
@@ -123,7 +133,7 @@ def update_connector(connector_id: str, body: ConnectorUpdateBody):
             cfg.config_json = merged
 
         if body.secret:  # falsy (None/"") preserves the stored secret
-            cfg.secret = body.secret
+            cfg.secret = encrypt_secret(body.secret)
 
         cfg.updated_at = datetime.utcnow()
         session.commit()
@@ -150,6 +160,11 @@ def test_connector(connector_id: str):
         _ensure_configs(session)
         cfg = session.get(ConnectorConfig, connector_id)
         session.commit()
+
+        if catalog.id in EXTRACTOR_IDS:
+            return _test_extractor(session, cfg)
+        if not catalog.simulated:
+            return _test_file_drop(session, cfg)
 
         cfg_json = cfg.config_json or {}
         missing = [
@@ -263,3 +278,97 @@ def list_connector_runs(connector_id: str, limit: int = 20):
         return [_run_view(r) for r in rows]
     finally:
         session.close()
+
+
+def _test_extractor(session, cfg: ConnectorConfig) -> dict:
+    """Connect, then extract since the watermark and validate without loading."""
+    from cfo_agent.connectors.extractor import load_batch
+    from cfo_agent.connectors.sync import _safe_error, build_extractor
+
+    try:
+        ex = build_extractor(cfg)
+        conn = ex.test()
+        if not conn.get("ok"):
+            return {"ok": False, "connector_id": cfg.id, "message": conn.get("message", "Connection failed")}
+        batch = ex.extract(cfg.watermark)
+        summary = load_batch(session, batch, connector_id=cfg.id, dry_run=True)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "connector_id": cfg.id, "message": _safe_error(e)}
+    finally:
+        session.rollback()
+    bad = [f for f in summary["files"] if f["status"] == "rejected"]
+    rows = sum(f["rows"] for f in summary["files"])
+    msg = conn["message"] + f". {rows} new/changed row(s) since the last sync" + (
+        f"; {len(bad)} table(s) would be rejected" if bad else (", all valid" if rows else ""))
+    return {"ok": not bad, "connector_id": cfg.id, "message": msg, "files": summary["files"]}
+
+
+def _test_file_drop(session, cfg: ConnectorConfig) -> dict:
+    """Dry run: validate every waiting file without loading or moving anything."""
+    from cfo_agent.connectors.csv_drop import process_inbox
+    from cfo_agent.connectors.sync import file_drop_inbox
+
+    try:
+        inbox = file_drop_inbox(cfg)
+        summary = process_inbox(session, inbox, connector_id=cfg.id, dry_run=True)
+    except ValueError as e:
+        return {"ok": False, "connector_id": cfg.id, "message": str(e)}
+    finally:
+        session.rollback()
+    bad = [f for f in summary["files"] if f["status"] == "rejected"]
+    waiting = len(summary["files"])
+    msg = (
+        f"Inbox {inbox.name}: {waiting} file(s) waiting"
+        + (f", {len(bad)} would be rejected" if bad else (", all valid" if waiting else ""))
+        + (f"; ignored: {', '.join(summary['unrecognised_files'])}" if summary["unrecognised_files"] else "")
+    )
+    return {"ok": not bad, "connector_id": cfg.id, "message": msg, "files": summary["files"]}
+
+
+@router.get("/connectors/{connector_id}/imports")
+def list_imports(connector_id: str, limit: int = 50):
+    """History of files taken from a file-drop connector's inbox."""
+    from cfo_agent.models import ImportedFile
+
+    session = get_session()
+    try:
+        rows = (
+            session.query(ImportedFile)
+            .filter_by(connector_id=connector_id)
+            .order_by(ImportedFile.id.desc())
+            .limit(min(max(limit, 1), 500))
+            .all()
+        )
+        return [
+            {
+                "id": r.id,
+                "run_id": r.run_id,
+                "file": r.filename,
+                "table": r.table,
+                "status": r.status,
+                "inserted": r.rows_inserted,
+                "updated": r.rows_updated,
+                "error_count": len(r.errors_json or []),
+                "errors": (r.errors_json or [])[:20],
+                "imported_at": r.imported_at,
+            }
+            for r in rows
+        ]
+    finally:
+        session.close()
+
+
+@router.get("/connectors/templates/{table}.csv")
+def csv_template(table: str):
+    """Header-only CSV template for one table of the file-drop format."""
+    from fastapi.responses import PlainTextResponse
+
+    from cfo_agent.connectors.csv_drop import SPEC_BY_NAME, template_header
+
+    if table not in SPEC_BY_NAME:
+        raise HTTPException(404, detail=f"Unknown table {table}")
+    return PlainTextResponse(
+        ",".join(template_header(table)) + "\n",
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{table}.csv"'},
+    )

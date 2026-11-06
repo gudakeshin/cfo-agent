@@ -1,0 +1,57 @@
+# Pilot deployment: PostgreSQL (pgvector) + API + job worker.
+#   cp .env.docker.example .env   # fill in secrets
+#   docker compose up -d --build
+# Put TLS in front (the client's ingress / load balancer) and set PUBLIC_BASE_URL.
+
+x-app: &app
+  build: .
+  image: cfo-agent:latest
+  env_file: .env
+  environment: &app-env
+    DATABASE_URL: postgresql+psycopg://cfo:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/cfo
+    LOG_FORMAT: json
+  volumes:
+    - ${INBOX_DIR:-./inbox}:/data/inbox          # ERP CSV exports land here (SFTP target)
+    - outbox:/app/backend/data/outbox             # email fallback copies
+    - ${USERS_FILE:-./users.yaml}:/app/backend/config/users.yaml:ro
+  depends_on:
+    db:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: cfo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: cfo
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cfo -d cfo"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    <<: *app
+    environment:
+      <<: *app-env
+      RUN_SCHEDULER: "false"            # jobs run in the worker
+    ports:
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-8000}:8000"
+
+  worker:
+    <<: *app
+    command: ["python", "-m", "cfo_agent.worker"]
+    environment:
+      <<: *app-env
+      RUN_SCHEDULER: "true"
+    healthcheck:
+      disable: true
+
+volumes:
+  pgdata:
+  outbox:

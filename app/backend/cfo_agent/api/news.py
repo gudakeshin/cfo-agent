@@ -76,6 +76,8 @@ def list_news(category: str | None = None, since: str | None = None, limit: int 
 
 @router.get("/news/status")
 def news_status():
+    from cfo_agent.news import news_disabled_reason
+
     session = get_session()
     try:
         latest = session.query(NewsRefreshRun).order_by(NewsRefreshRun.id.desc()).first()
@@ -86,6 +88,7 @@ def news_status():
             "running_run_id": running.id if running else None,
             "total_items": total_items,
             "latest_run": _run_dict(latest) if latest else None,
+            "disabled_reason": news_disabled_reason(),
         }
     finally:
         session.close()
@@ -93,6 +96,11 @@ def news_status():
 
 @router.post("/news/refresh")
 def refresh_news(body: RefreshBody | None, background_tasks: BackgroundTasks):
+    from cfo_agent.news import news_disabled_reason
+
+    reason = news_disabled_reason()
+    if reason:
+        raise HTTPException(409, detail=reason)
     session = get_session()
     try:
         running = session.query(NewsRefreshRun).filter_by(status="running").first()

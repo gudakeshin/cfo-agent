@@ -27,6 +27,8 @@ export function FeedbackButtons({
   const [verdict, setVerdict] = useState<FeedbackVerdict | undefined>(initialVerdict)
   const [alreadyKnew, setAlreadyKnew] = useState(initialAlreadyKnew)
   const [note, setNote] = useState(initialNote)
+  // The note box only appears once a verdict is chosen, so a typed note is never dropped.
+  const [showNote, setShowNote] = useState(Boolean(initialNote))
 
   const mutation = useMutation({
     mutationFn: (body: { verdict: FeedbackVerdict; already_knew: boolean; note: string }) =>
@@ -54,12 +56,14 @@ export function FeedbackButtons({
   }
 
   return (
-    <div className="feedback-buttons">
+    <div className="feedback-buttons" role="group" aria-label="Was this useful?">
+      <span className="feedback-prompt">Your call:</span>
       {VERDICTS.map(({ key, label }) => (
         <button
           key={key}
           type="button"
           className={verdict === key ? 'selected' : ''}
+          aria-pressed={verdict === key}
           onClick={() => submit(key)}
           disabled={mutation.isPending}
         >
@@ -75,19 +79,30 @@ export function FeedbackButtons({
         />
         Already knew
       </label>
-      <div className="feedback-note">
-        <textarea
-          placeholder="Optional note (e.g. too much detail on GST mechanics)"
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          rows={2}
-        />
-        {verdict && (
+      {verdict && !showNote && (
+        <button type="button" className="link-button" onClick={() => setShowNote(true)}>
+          Add a note
+        </button>
+      )}
+      {verdict && showNote && (
+        <div className="feedback-note">
+          <textarea
+            aria-label="Feedback note"
+            placeholder="Optional note (e.g. too much detail on GST mechanics)"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={2}
+          />
           <button type="button" onClick={saveNote} disabled={mutation.isPending}>
             Save note
           </button>
-        )}
-      </div>
+        </div>
+      )}
+      {mutation.isSuccess && !mutation.isPending && (
+        <span className="success-text" role="status">
+          Saved
+        </span>
+      )}
       {mutation.isError && (
         <span className="error-text">{(mutation.error as Error).message}</span>
       )}

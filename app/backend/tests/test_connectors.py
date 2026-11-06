@@ -66,6 +66,8 @@ def test_catalog_ids_unique_and_have_secret_field():
     ids = [c.id for c in CONNECTORS]
     assert len(ids) == len(set(ids))
     for c in CONNECTORS:
+        if not c.simulated:
+            continue  # real connectors (CSV file drop) have no secret
         secret_fields = [f for f in c.config_fields if f.secret]
         assert len(secret_fields) == 1, f"{c.id} should declare exactly one secret field"
 
@@ -275,6 +277,14 @@ def test_stale_run_recovery_marks_interrupted(db_session):
     db_session.add(run)
     db_session.commit()
 
+    # A fresh run may belong to another live replica: left alone.
+    assert _recover_stale_runs(db_session) == 0
+    db_session.commit()
+    # Once it has made no progress for 30 minutes it is recovered.
+    from datetime import datetime, timedelta
+
+    run.started_at = datetime.utcnow() - timedelta(minutes=31)
+    db_session.commit()
     _recover_stale_runs(db_session)
     db_session.commit()
     db_session.expire_all()

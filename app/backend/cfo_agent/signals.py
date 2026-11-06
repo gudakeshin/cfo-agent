@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Callable
@@ -12,7 +14,12 @@ from sqlalchemy.orm import Session
 
 from cfo_agent.kra import get_active_framework
 from cfo_agent.models import (
+    ErpBankAccount,
     ErpCashDaily,
+    ErpCreditNote,
+    ErpCustomer,
+    ErpEntity,
+    ErpGlEntry,
     ErpExpense,
     ErpGstEvent,
     ErpPayment,
@@ -49,6 +56,110 @@ class MetricResult:
     delta_wow: float | None = None
     lineage: list[str] = field(default_factory=list)
     unit: str = ""
+    # False when the metric is undefined for this week (e.g. a zero denominator).
+    # Unavailable metrics produce no signal and never trip a red line.
+    available: bool = True
+
+
+def unavailable(metric_id: str, unit: str = "", reason: str = "") -> MetricResult:
+    return MetricResult(metric_id, 0.0, lineage=[], unit=unit, available=False)
+
+
+# ── entity scope & shared ledgers ────────────────────────────────────────────
+# Metrics are consolidated across every entity flagged `consolidate` by default;
+# `with entity_scope("SUB1"):` computes them for one entity. Intercompany customers
+# and vendors are always excluded so group receivables/payables are not inflated.
+_ENTITY_SCOPE: ContextVar[str | None] = ContextVar("entity_scope", default=None)
+
+
+@contextmanager
+def entity_scope(entity: str | None):
+    token = _ENTITY_SCOPE.set(entity)
+    try:
+        yield
+    finally:
+        _ENTITY_SCOPE.reset(token)
+
+
+def _entity_conds(session: Session, model) -> list:
+    col = getattr(model, "entity", None)
+    if col is None:
+        return []
+    scope = _ENTITY_SCOPE.get()
+    if scope:
+        return [col == scope]
+    excluded = [e for (e,) in session.query(ErpEntity.business_key).filter(ErpEntity.consolidate.is_(False))]
+    return [~col.in_(excluded)] if excluded else []
+
+
+def open_receivables(session: Session, end: date) -> list[tuple[ErpSalesInvoice, int]]:
+    """(invoice, open amount in paise) as of `end`: invoice less receipts and credit
+    notes dated on or before `end`. One aggregated query, not one per invoice."""
+    paid = (
+        session.query(ErpReceipt.invoice_id.label("iid"), func.sum(ErpReceipt.amount_paise).label("amt"))
+        .filter(ErpReceipt.receipt_date <= end).group_by(ErpReceipt.invoice_id).subquery()
+    )
+    cn = (
+        session.query(ErpCreditNote.invoice_id.label("iid"), func.sum(ErpCreditNote.amount_paise).label("amt"))
+        .filter(ErpCreditNote.note_date <= end).group_by(ErpCreditNote.invoice_id).subquery()
+    )
+    rows = (
+        session.query(ErpSalesInvoice, func.coalesce(paid.c.amt, 0), func.coalesce(cn.c.amt, 0))
+        .join(ErpCustomer, ErpCustomer.id == ErpSalesInvoice.customer_id)
+        .outerjoin(paid, paid.c.iid == ErpSalesInvoice.id)
+        .outerjoin(cn, cn.c.iid == ErpSalesInvoice.id)
+        .filter(ErpSalesInvoice.invoice_date <= end, ErpCustomer.is_intercompany.is_(False),
+                *_entity_conds(session, ErpSalesInvoice))
+        .all()
+    )
+    out = []
+    for inv, p, c in rows:
+        rem = inv.amount_paise - int(p) - int(c)
+        if rem > 0:
+            out.append((inv, rem))
+    return out
+
+
+def open_payables(session: Session, end: date) -> list[tuple[ErpPurchaseInvoice, int]]:
+    paid = (
+        session.query(ErpPayment.purchase_invoice_id.label("pid"), func.sum(ErpPayment.amount_paise).label("amt"))
+        .filter(ErpPayment.payment_date <= end).group_by(ErpPayment.purchase_invoice_id).subquery()
+    )
+    rows = (
+        session.query(ErpPurchaseInvoice, func.coalesce(paid.c.amt, 0))
+        .outerjoin(paid, paid.c.pid == ErpPurchaseInvoice.id)
+        .filter(ErpPurchaseInvoice.invoice_date <= end, ErpPurchaseInvoice.is_intercompany.is_(False),
+                *_entity_conds(session, ErpPurchaseInvoice))
+        .all()
+    )
+    return [(pin, pin.amount_paise - int(p)) for pin, p in rows if pin.amount_paise - int(p) > 0]
+
+
+def cash_positions(session: Session, end: date, *, include_restricted: bool = False) -> list[tuple[ErpCashDaily, ErpBankAccount | None]]:
+    """Latest balance on or before `end` for every bank account in scope."""
+    latest = (
+        session.query(ErpCashDaily.account_key.label("ak"), func.max(ErpCashDaily.as_of_date).label("d"))
+        .filter(ErpCashDaily.as_of_date <= end).group_by(ErpCashDaily.account_key).subquery()
+    )
+    rows = (
+        session.query(ErpCashDaily)
+        .join(latest, (latest.c.ak == ErpCashDaily.account_key) & (latest.c.d == ErpCashDaily.as_of_date))
+        .order_by(ErpCashDaily.account_key)
+        .all()
+    )
+    accounts = {a.business_key: a for a in session.query(ErpBankAccount).all()}
+    scope = _ENTITY_SCOPE.get()
+    excluded = {e for (e,) in session.query(ErpEntity.business_key).filter(ErpEntity.consolidate.is_(False))}
+    out = []
+    for r in rows:
+        acct = accounts.get(r.account_key)
+        entity = acct.entity if acct else "MAIN"
+        if acct and acct.is_restricted and not include_restricted:
+            continue
+        if (scope and entity != scope) or (not scope and entity in excluded):
+            continue
+        out.append((r, acct))
+    return out
 
 
 def _cid(table: str, business_key: str) -> str:
@@ -66,40 +177,36 @@ def previous_week(week: str) -> str:
 
 @register("dso_days")
 def compute_dso(session: Session, week: str) -> MetricResult:
-    """DSO ≈ ending AR / average daily credit sales over trailing 30 days."""
+    """DSO ≈ ending AR / average daily credit sales (net of credit notes) over 30 days."""
     end = as_of_end(week)
     sales_start = end - timedelta(days=29)
-    invoices = (
-        session.query(ErpSalesInvoice)
-        .filter(ErpSalesInvoice.invoice_date <= end)
-        .all()
-    )
-    # Collect (remaining, citation) then keep top AR contributors
-    open_rows: list[tuple[int, str]] = []
-    ar_paise = 0
-    for inv in invoices:
-        paid = (
-            session.query(func.coalesce(func.sum(ErpReceipt.amount_paise), 0))
-            .filter(ErpReceipt.invoice_id == inv.id, ErpReceipt.receipt_date <= end)
-            .scalar()
-        )
-        remaining = inv.amount_paise - int(paid)
-        if remaining > 0:
-            ar_paise += remaining
-            open_rows.append((remaining, _cid("erp_sales_invoices", inv.business_key)))
-
+    open_rows = open_receivables(session, end)
+    ar_paise = sum(rem for _, rem in open_rows)
     credit_sales = (
         session.query(func.coalesce(func.sum(ErpSalesInvoice.amount_paise), 0))
+        .join(ErpCustomer, ErpCustomer.id == ErpSalesInvoice.customer_id)
         .filter(
             ErpSalesInvoice.invoice_date >= sales_start,
             ErpSalesInvoice.invoice_date <= end,
+            ErpCustomer.is_intercompany.is_(False),
+            *_entity_conds(session, ErpSalesInvoice),
         )
         .scalar()
     )
-    daily_sales = int(credit_sales) / 30.0 if credit_sales else 1.0
-    dso = ar_paise / daily_sales if daily_sales else 0.0
-    open_rows.sort(key=lambda x: -x[0])
-    lineage = [c for _, c in open_rows[:40]]
+    notes = (
+        session.query(func.coalesce(func.sum(ErpCreditNote.amount_paise), 0))
+        .join(ErpSalesInvoice, ErpSalesInvoice.id == ErpCreditNote.invoice_id)
+        .filter(ErpCreditNote.note_date >= sales_start, ErpCreditNote.note_date <= end,
+                *_entity_conds(session, ErpSalesInvoice))
+        .scalar()
+    )
+    net_sales = int(credit_sales) - int(notes)
+    if net_sales <= 0:
+        # No credit sales in the window: DSO is undefined, not "infinite".
+        return unavailable("dso_days", "days", "no credit sales in trailing 30 days")
+    dso = ar_paise / (net_sales / 30.0)
+    open_rows.sort(key=lambda x: -x[1])
+    lineage = [_cid("erp_sales_invoices", inv.business_key) for inv, _ in open_rows[:40]]
     return MetricResult("dso_days", round(dso, 2), lineage=lineage, unit="days")
 
 
@@ -107,44 +214,35 @@ def compute_dso(session: Session, week: str) -> MetricResult:
 def compute_dpo(session: Session, week: str) -> MetricResult:
     end = as_of_end(week)
     start = end - timedelta(days=89)
-    pins = session.query(ErpPurchaseInvoice).filter(ErpPurchaseInvoice.invoice_date <= end).all()
-    ap = 0
-    lineage: list[str] = []
-    for pin in pins:
-        paid = (
-            session.query(func.coalesce(func.sum(ErpPayment.amount_paise), 0))
-            .filter(ErpPayment.purchase_invoice_id == pin.id, ErpPayment.payment_date <= end)
-            .scalar()
-        )
-        rem = pin.amount_paise - int(paid)
-        if rem > 0:
-            ap += rem
-            lineage.append(_cid("erp_purchase_invoices", pin.business_key))
+    rows = open_payables(session, end)
+    ap = sum(rem for _, rem in rows)
     cogs_proxy = (
         session.query(func.coalesce(func.sum(ErpPayment.amount_paise), 0))
-        .filter(ErpPayment.payment_date >= start, ErpPayment.payment_date <= end)
+        .join(ErpPurchaseInvoice, ErpPurchaseInvoice.id == ErpPayment.purchase_invoice_id)
+        .filter(ErpPayment.payment_date >= start, ErpPayment.payment_date <= end,
+                ErpPurchaseInvoice.is_intercompany.is_(False), *_entity_conds(session, ErpPurchaseInvoice))
         .scalar()
     )
-    daily = int(cogs_proxy) / 90.0 if cogs_proxy else 1.0
-    dpo = ap / daily if daily else 0.0
+    if not cogs_proxy:
+        return unavailable("dpo_days", "days", "no payments in trailing 90 days")
+    dpo = ap / (int(cogs_proxy) / 90.0)
+    rows.sort(key=lambda x: (x[0].invoice_date, x[0].id))
+    lineage = [_cid("erp_purchase_invoices", p.business_key) for p, _ in rows]
     return MetricResult("dpo_days", round(dpo, 2), lineage=lineage[:40], unit="days")
 
 
 @register("cash_balance_cr")
 def compute_cash(session: Session, week: str) -> MetricResult:
+    """Available cash: latest balance of every unrestricted account in scope, in INR."""
     end = as_of_end(week)
-    row = (
-        session.query(ErpCashDaily)
-        .filter(ErpCashDaily.as_of_date <= end)
-        .order_by(ErpCashDaily.as_of_date.desc())
-        .first()
-    )
-    if not row:
+    positions = cash_positions(session, end)
+    if not positions:
         return MetricResult("cash_balance_cr", 0.0, lineage=[], unit="Cr")
+    total = sum(r.balance_paise for r, _ in positions)
     return MetricResult(
         "cash_balance_cr",
-        round(paise_to_crore(row.balance_paise), 2),
-        lineage=[_cid("erp_cash_daily", row.business_key)],
+        round(paise_to_crore(total), 2),
+        lineage=[_cid("erp_cash_daily", r.business_key) for r, _ in positions],
         unit="Cr",
     )
 
@@ -152,12 +250,24 @@ def compute_cash(session: Session, week: str) -> MetricResult:
 @register("covenant_headroom_cr")
 def compute_covenant_headroom(session: Session, week: str) -> MetricResult:
     cash = compute_cash(session, week)
-    # Raw covenant ₹20 Cr
-    headroom = cash.value - 20.0
+    if not cash.lineage:
+        return unavailable("covenant_headroom_cr", "Cr", "no cash data")
+    # Covenant threshold comes from the ERP covenant register (fallback ₹20 Cr)
+    from cfo_agent.models import ErpCovenant
+
+    cov = (
+        session.query(ErpCovenant)
+        .filter_by(metric="cash_balance_cr")
+        .order_by(ErpCovenant.id.asc())
+        .first()
+    )
+    threshold_cr = paise_to_crore(cov.threshold_paise) if cov else 20.0
+    headroom = cash.value - threshold_cr
+    lineage = list(cash.lineage) + ([_cid("erp_covenants", cov.business_key)] if cov else [])
     return MetricResult(
         "covenant_headroom_cr",
         round(headroom, 2),
-        lineage=cash.lineage,
+        lineage=lineage,
         unit="Cr",
     )
 
@@ -165,47 +275,24 @@ def compute_covenant_headroom(session: Session, week: str) -> MetricResult:
 @register("ar_overdue_pct")
 def compute_ar_overdue(session: Session, week: str) -> MetricResult:
     end = as_of_end(week)
-    invoices = session.query(ErpSalesInvoice).filter(ErpSalesInvoice.invoice_date <= end).all()
-    total_ar = 0
-    overdue = 0
-    lineage: list[str] = []
-    for inv in invoices:
-        paid = (
-            session.query(func.coalesce(func.sum(ErpReceipt.amount_paise), 0))
-            .filter(ErpReceipt.invoice_id == inv.id, ErpReceipt.receipt_date <= end)
-            .scalar()
-        )
-        rem = inv.amount_paise - int(paid)
-        if rem <= 0:
-            continue
-        total_ar += rem
-        if inv.due_date < end:
-            overdue += rem
-            lineage.append(_cid("erp_sales_invoices", inv.business_key))
+    rows = open_receivables(session, end)
+    total_ar = sum(rem for _, rem in rows)
+    overdue_rows = sorted(((inv, rem) for inv, rem in rows if inv.due_date < end), key=lambda x: (x[0].invoice_date, x[0].id))
+    overdue = sum(rem for _, rem in overdue_rows)
     pct = (100.0 * overdue / total_ar) if total_ar else 0.0
+    lineage = [_cid("erp_sales_invoices", inv.business_key) for inv, _ in overdue_rows]
     return MetricResult("ar_overdue_pct", round(pct, 2), lineage=lineage[:40], unit="%")
 
 
 @register("ap_overdue_pct")
 def compute_ap_overdue(session: Session, week: str) -> MetricResult:
     end = as_of_end(week)
-    pins = session.query(ErpPurchaseInvoice).filter(ErpPurchaseInvoice.invoice_date <= end).all()
-    total = overdue = 0
-    lineage: list[str] = []
-    for pin in pins:
-        paid = (
-            session.query(func.coalesce(func.sum(ErpPayment.amount_paise), 0))
-            .filter(ErpPayment.purchase_invoice_id == pin.id, ErpPayment.payment_date <= end)
-            .scalar()
-        )
-        rem = pin.amount_paise - int(paid)
-        if rem <= 0:
-            continue
-        total += rem
-        if pin.due_date < end:
-            overdue += rem
-            lineage.append(_cid("erp_purchase_invoices", pin.business_key))
+    rows = open_payables(session, end)
+    total = sum(rem for _, rem in rows)
+    overdue_rows = sorted(((p, rem) for p, rem in rows if p.due_date < end), key=lambda x: (x[0].invoice_date, x[0].id))
+    overdue = sum(rem for _, rem in overdue_rows)
     pct = (100.0 * overdue / total) if total else 0.0
+    lineage = [_cid("erp_purchase_invoices", p.business_key) for p, _ in overdue_rows]
     return MetricResult("ap_overdue_pct", round(pct, 2), lineage=lineage[:40], unit="%")
 
 
@@ -277,18 +364,18 @@ def compute_opex_ratio(session: Session, week: str) -> MetricResult:
     start = week_monday(week)
     opex = (
         session.query(func.coalesce(func.sum(ErpExpense.amount_paise), 0))
-        .filter(ErpExpense.expense_date >= start, ErpExpense.expense_date <= end)
+        .filter(ErpExpense.expense_date >= start, ErpExpense.expense_date <= end, *_entity_conds(session, ErpExpense))
         .scalar()
     )
     rev = (
         session.query(func.coalesce(func.sum(ErpRevenueDaily.amount_paise), 0))
-        .filter(ErpRevenueDaily.as_of_date >= start, ErpRevenueDaily.as_of_date <= end)
+        .filter(ErpRevenueDaily.as_of_date >= start, ErpRevenueDaily.as_of_date <= end, *_entity_conds(session, ErpRevenueDaily))
         .scalar()
     )
     ratio = (100.0 * int(opex) / int(rev)) if rev else 0.0
     exps = (
         session.query(ErpExpense)
-        .filter(ErpExpense.expense_date >= start, ErpExpense.expense_date <= end)
+        .filter(ErpExpense.expense_date >= start, ErpExpense.expense_date <= end, *_entity_conds(session, ErpExpense))
         .limit(30)
         .all()
     )
@@ -314,6 +401,7 @@ def compute_cc_variance(session: Session, week: str) -> MetricResult:
             session.query(func.coalesce(func.sum(ErpExpense.amount_paise), 0))
             .filter(
                 ErpExpense.cost_center == cc,
+                *_entity_conds(session, ErpExpense),
                 ErpExpense.expense_date >= start,
                 ErpExpense.expense_date <= end,
             )
@@ -323,19 +411,23 @@ def compute_cc_variance(session: Session, week: str) -> MetricResult:
             session.query(func.coalesce(func.sum(ErpExpense.amount_paise), 0))
             .filter(
                 ErpExpense.cost_center == cc,
+                *_entity_conds(session, ErpExpense),
                 ErpExpense.expense_date >= hist_start,
                 ErpExpense.expense_date < start,
             )
             .scalar()
         )
-        weekly_avg = int(hist) / 8.0 if hist else 1.0
-        var = 100.0 * (int(cur) - weekly_avg) / weekly_avg if weekly_avg else 0.0
+        if not hist:
+            continue  # no baseline for this cost center yet — variance undefined
+        weekly_avg = int(hist) / 8.0
+        var = 100.0 * (int(cur) - weekly_avg) / weekly_avg
         if abs(var) >= abs(max_var):
             max_var = var
             rows = (
                 session.query(ErpExpense)
                 .filter(
                     ErpExpense.cost_center == cc,
+                *_entity_conds(session, ErpExpense),
                     ErpExpense.expense_date >= start,
                     ErpExpense.expense_date <= end,
                 )
@@ -348,16 +440,30 @@ def compute_cc_variance(session: Session, week: str) -> MetricResult:
 
 @register("close_cycle_days")
 def compute_close_cycle(session: Session, week: str) -> MetricResult:
-    """Proxy: days from week-end to last expense/revenue posting within week (soft close proxy)."""
-    # Synthetic: baseline 4 days, stretches slightly late quarter
+    """Days from the latest closed period's end to its last GL posting.
+
+    A period counts as closed once 10 days have passed since its end. Without GL
+    data the metric falls back to a fixed proxy (flagged `proxy` in METRIC_META)."""
     end = as_of_end(week)
+    pe = (
+        session.query(func.max(ErpGlEntry.period_end))
+        .filter(ErpGlEntry.period_end <= end - timedelta(days=10), *_entity_conds(session, ErpGlEntry))
+        .scalar()
+    )
+    if pe is not None:
+        last = (
+            session.query(ErpGlEntry)
+            .filter(ErpGlEntry.period_end == pe, ErpGlEntry.posting_date <= end, *_entity_conds(session, ErpGlEntry))
+            .order_by(ErpGlEntry.posting_date.desc(), ErpGlEntry.id.desc())
+            .first()
+        )
+        if last is not None:
+            days = max(0, (last.posting_date - pe).days)
+            return MetricResult("close_cycle_days", float(days),
+                                lineage=[_cid("erp_gl_entries", last.business_key)], unit="days")
     wi = end.isocalendar().week
     value = 4.0 + (0.3 if wi % 4 == 0 else 0.0)
-    cash = (
-        session.query(ErpCashDaily)
-        .filter(ErpCashDaily.as_of_date == end)
-        .first()
-    )
+    cash = session.query(ErpCashDaily).filter(ErpCashDaily.as_of_date == end).first()
     lineage = [_cid("erp_cash_daily", cash.business_key)] if cash else []
     return MetricResult("close_cycle_days", value, lineage=lineage, unit="days")
 
@@ -401,7 +507,9 @@ def compute_collections_coverage(session: Session, week: str) -> MetricResult:
         .filter(ErpSalesInvoice.due_date >= start, ErpSalesInvoice.due_date <= end)
         .all()
     )
-    due_amt = sum(i.amount_paise for i in due) or 1
+    due_amt = sum(i.amount_paise for i in due)
+    if not due_amt:
+        return unavailable("collections_coverage_pct", "%", "nothing fell due this week")
     pct = 100.0 * int(collected) / due_amt
     receipts = (
         session.query(ErpReceipt)
@@ -433,7 +541,7 @@ def compute_fcf(session: Session, week: str) -> MetricResult:
     )
     expenses = (
         session.query(func.coalesce(func.sum(ErpExpense.amount_paise), 0))
-        .filter(ErpExpense.expense_date >= start, ErpExpense.expense_date <= end)
+        .filter(ErpExpense.expense_date >= start, ErpExpense.expense_date <= end, *_entity_conds(session, ErpExpense))
         .scalar()
     )
     fcf = int(receipts) - int(payments) - int(expenses)
@@ -460,6 +568,7 @@ def compute_segment_growth(session: Session, week: str) -> MetricResult:
             session.query(func.coalesce(func.sum(ErpRevenueDaily.amount_paise), 0))
             .filter(
                 ErpRevenueDaily.segment == seg,
+                *_entity_conds(session, ErpRevenueDaily),
                 ErpRevenueDaily.as_of_date >= start,
                 ErpRevenueDaily.as_of_date <= end,
             )
@@ -469,6 +578,7 @@ def compute_segment_growth(session: Session, week: str) -> MetricResult:
             session.query(func.coalesce(func.sum(ErpRevenueDaily.amount_paise), 0))
             .filter(
                 ErpRevenueDaily.segment == seg,
+                *_entity_conds(session, ErpRevenueDaily),
                 ErpRevenueDaily.as_of_date >= prev_start,
                 ErpRevenueDaily.as_of_date <= prev_end,
             )
@@ -481,6 +591,7 @@ def compute_segment_growth(session: Session, week: str) -> MetricResult:
                 session.query(ErpRevenueDaily)
                 .filter(
                     ErpRevenueDaily.segment == seg,
+                *_entity_conds(session, ErpRevenueDaily),
                     ErpRevenueDaily.as_of_date >= start,
                     ErpRevenueDaily.as_of_date <= end,
                 )
@@ -501,6 +612,7 @@ def compute_rev_concentration(session: Session, week: str) -> MetricResult:
             session.query(func.coalesce(func.sum(ErpRevenueDaily.amount_paise), 0))
             .filter(
                 ErpRevenueDaily.segment == seg,
+                *_entity_conds(session, ErpRevenueDaily),
                 ErpRevenueDaily.as_of_date >= start,
                 ErpRevenueDaily.as_of_date <= end,
             )
@@ -576,6 +688,79 @@ def severity(
     return 1.0
 
 
+# Which direction of movement is adverse for each metric. A favourable move still
+# registers (big improvements can matter) but at half severity, so a DSO drop never
+# outranks an equal DSO rise. None = both directions are adverse.
+ADVERSE_DIRECTION: dict[str, str | None] = {
+    "dso_days": "up",
+    "dpo_days": None,  # falling = cash out faster; rising = supplier stress
+    "cash_balance_cr": "down",
+    "covenant_headroom_cr": "down",
+    "ar_overdue_pct": "up",
+    "ap_overdue_pct": "up",
+    "gst_open_notices": "up",
+    "gst_notice_exposure_cr": "up",
+    "itc_at_risk_cr": "up",
+    "opex_ratio_pct": "up",
+    "cost_center_variance_pct": None,
+    "close_cycle_days": "up",
+    "unreconciled_items": "up",
+    "collections_coverage_pct": "down",
+    "free_cash_flow_cr": "down",
+    "segment_revenue_growth_pct": "down",
+    "revenue_concentration_pct": "up",
+    "board_pack_readiness_score": "down",
+}
+FAVOURABLE_MOVE_FACTOR = 0.5
+
+# Human-readable labels and units for every metric (UI pickers, sparklines, evidence).
+METRIC_META: dict[str, dict[str, str]] = {
+    "dso_days": {"label": "Days sales outstanding (DSO)", "unit": "days"},
+    "dpo_days": {"label": "Days payables outstanding (DPO)", "unit": "days"},
+    "cash_balance_cr": {"label": "Cash balance", "unit": "₹ Cr"},
+    "covenant_headroom_cr": {"label": "Cash covenant headroom", "unit": "₹ Cr"},
+    "ar_overdue_pct": {"label": "Receivables overdue", "unit": "%"},
+    "ap_overdue_pct": {"label": "Payables overdue", "unit": "%"},
+    "gst_open_notices": {"label": "Open GST notices", "unit": "count"},
+    "gst_notice_exposure_cr": {"label": "GST notice exposure", "unit": "₹ Cr"},
+    "itc_at_risk_cr": {"label": "Input tax credit at risk", "unit": "₹ Cr"},
+    "opex_ratio_pct": {"label": "Opex to revenue", "unit": "%"},
+    "cost_center_variance_pct": {"label": "Largest cost-centre variance", "unit": "%"},
+    "close_cycle_days": {"label": "Month-end close cycle", "unit": "days"},
+    "unreconciled_items": {"label": "Unreconciled items", "unit": "count"},
+    "collections_coverage_pct": {"label": "Collections vs amount due", "unit": "%"},
+    "free_cash_flow_cr": {"label": "Free cash flow (week)", "unit": "₹ Cr"},
+    "segment_revenue_growth_pct": {"label": "Segment revenue growth", "unit": "%"},
+    "revenue_concentration_pct": {"label": "Top-segment revenue share", "unit": "%"},
+    "board_pack_readiness_score": {"label": "Board pack readiness", "unit": "score"},
+}
+
+
+def metric_meta(metric_id: str) -> dict:
+    meta = METRIC_META.get(metric_id, {})
+    return {
+        "id": metric_id,
+        "label": meta.get("label", metric_id.replace("_", " ")),
+        "unit": meta.get("unit", ""),
+        "adverse_direction": ADVERSE_DIRECTION.get(metric_id),
+        "custom": bool(meta.get("custom")),
+        "proxy": metric_id in PROXY_METRICS,
+        "description": meta.get("description", ""),
+    }
+
+
+# Metrics that are stand-ins until the client's data supports the real measure
+PROXY_METRICS = {"unreconciled_items", "board_pack_readiness_score"}
+
+
+def directional_severity(metric_id: str, delta_wow: float | None, sev: float) -> float:
+    direction = ADVERSE_DIRECTION.get(metric_id)
+    if delta_wow is None or direction is None or delta_wow == 0:
+        return sev
+    adverse = delta_wow > 0 if direction == "up" else delta_wow < 0
+    return sev if adverse else sev * FAVOURABLE_MOVE_FACTOR
+
+
 def rank_boost(kra_id: str, kra_ranks: list[str]) -> float:
     """rank_boost = 1 + (N − rank + 1)/N for ranked KRAs; else 1.0."""
     if kra_id not in kra_ranks:
@@ -590,7 +775,10 @@ def priority_score(face_weight: float, boost: float, sev: float) -> float:
 
 
 def compute_all_signals(session: Session, week: str, *, persist: bool = True) -> list[Signal]:
-    fw = get_active_framework()
+    from cfo_agent.metrics_dsl import ensure_custom_metrics
+
+    ensure_custom_metrics(session)
+    fw = get_active_framework(session)
     metrics = sorted(fw.metrics_for_signals())
     prev = previous_week(week)
 
@@ -624,9 +812,22 @@ def compute_all_signals(session: Session, week: str, *, persist: bool = True) ->
         if not fn:
             continue
         mr = fn(session, week)
+        if not mr.available:
+            continue
         baseline = prev_map.get(metric_id)
         delta = (mr.value - baseline) if baseline is not None else None
         sev = severity(delta, history.get(metric_id, []), baseline)
+        sev = directional_severity(metric_id, delta, sev)
+        # Plan gap, covenant proximity / projected breach and anomalies can only
+        # raise severity (see analytics.py); their records become citable lineage.
+        from cfo_agent.analytics import signal_context
+
+        ctx, floor, extra_cites = signal_context(
+            session, metric_id, week, mr.value, delta, history.get(metric_id, []), ADVERSE_DIRECTION.get(metric_id)
+        )
+        ctx["base_severity"] = round(sev, 3)
+        sev = max(sev, floor)
+        lineage = list(mr.lineage) + [c for c in extra_cites if c not in mr.lineage]
         kra_ids = fw.metric_map.get(metric_id, [])
         # Only grounded KRAs
         kra_ids = [k for k in kra_ids if fw.kras[k].grounding == "erp"]
@@ -646,7 +847,8 @@ def compute_all_signals(session: Session, week: str, *, persist: bool = True) ->
         row.delta_wow = delta
         row.severity = sev
         row.kra_ids_json = kra_ids
-        row.lineage_json = mr.lineage
+        row.lineage_json = lineage
+        row.context_json = ctx
         results.append(row)
 
     if persist:

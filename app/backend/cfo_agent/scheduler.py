@@ -12,8 +12,8 @@ from apscheduler.triggers.cron import CronTrigger
 from cfo_agent.db import get_session
 from cfo_agent.digest.email import send_alert_email
 from cfo_agent.memory.consolidation import has_unconsolidated_activity, run_consolidation
-from cfo_agent.models import Digest, PipelineRun
-from cfo_agent.pipeline.orchestrator import run_pipeline, week_is_locked
+from cfo_agent.models import Digest
+from cfo_agent.pipeline.orchestrator import run_pipeline
 from cfo_agent.redlines import (
     close_cleared_episodes,
     evaluate_rules,
@@ -51,51 +51,67 @@ def _parse_cron(expr: str) -> dict:
     }
 
 
+def _latest_data_sunday(session):
+    """Sunday ending the latest week that has ERP data (None if no data)."""
+    from cfo_agent.models import ErpCashDaily
+
+    end = session.query(ErpCashDaily.as_of_date).order_by(ErpCashDaily.as_of_date.desc()).limit(1).scalar()
+    if not end:
+        return None
+    if end.weekday() != 6:  # partial week → last completed Sunday before it
+        end = end - timedelta(days=end.weekday() + 1)
+    return end
+
+
+def select_digest_week(session, weighting_version_id: int) -> str | None:
+    """Which week the scheduled digest should cover.
+
+    live   → the latest completed week with data.
+    replay → the week after the replay clock (the demo walks the quarter one week
+             per run); the first week when no clock is set.
+    Returns None if that week already has a digest under the active weighting —
+    a weighting change never back-fills old weeks."""
+    from cfo_agent.timeutil import quarter_weeks_ending
+
+    end = _latest_data_sunday(session)
+    if not end:
+        return None
+    weeks = quarter_weeks_ending(end, 13)
+    if get_settings().data_mode == "live":
+        target = weeks[-1]
+    else:
+        clock = get_replay_clock_week(session)
+        if clock in weeks:
+            idx = weeks.index(clock)
+            target = weeks[min(idx + 1, len(weeks) - 1)]
+        else:
+            target = weeks[0]
+    exists = session.query(Digest).filter_by(week=target, weighting_version_id=weighting_version_id).first()
+    return None if exists else target
+
+
 def job_digest() -> None:
-    """Generate earliest week that has data but no digest under active weighting."""
+    """Scheduled weekly digest (see select_digest_week for which week)."""
+    from cfo_agent.pipeline.orchestrator import WeekBusy, reserve_week
+
     session = get_session()
     try:
-        from cfo_agent.models import ErpCashDaily
-        from cfo_agent.timeutil import quarter_weeks_ending
-
-        end = session.query(ErpCashDaily.as_of_date).order_by(ErpCashDaily.as_of_date.desc()).limit(1).scalar()
-        if not end:
-            logger.info("Digest job: no ERP data")
-            return
-        # Align to Sunday
-        while end.weekday() != 6:
-            end = end  # already should be Sunday from generator
-            break
-        weeks = quarter_weeks_ending(end if end.weekday() == 6 else last_completed_sunday(), 13)
         wv = get_active_weighting(session)
-        target = None
-        for w in weeks:
-            exists = (
-                session.query(Digest)
-                .filter_by(week=w, weighting_version_id=wv.id)
-                .first()
-            )
-            if not exists:
-                target = w
-                break
+        target = select_digest_week(session, wv.id)
         if not target:
-            logger.info("Digest job: no undigested week — no-op")
+            logger.info("Digest job: nothing to digest — no-op")
             return
-        if week_is_locked(target):
-            logger.info("Digest job: week %s locked", target)
+        try:
+            run = reserve_week(session, target, wv.id)
+        except WeekBusy as e:
+            logger.info("Digest job: %s", e)
             return
-        run = PipelineRun(
-            week=target,
-            weighting_version_id=wv.id,
-            status="pending",
-        )
-        session.add(run)
-        session.commit()
         rid = run.id
         session.close()
         run_pipeline(rid, target, wv.id)
     except Exception:
         logger.exception("Digest job failed")
+    finally:
         session.close()
 
 
@@ -107,10 +123,20 @@ def job_redline_sweep(as_of=None) -> list[int]:
         rules = wv.content_json.get("red_lines") or []
         clock = get_replay_clock_week(session)
         if as_of is None:
-            if clock:
+            if get_settings().data_mode == "live":
+                # Live feed: evaluate against the latest data, never beyond today.
+                from cfo_agent.models import ErpCashDaily
+                from cfo_agent.timeutil import today_ist
+
+                latest = session.query(ErpCashDaily.as_of_date).order_by(ErpCashDaily.as_of_date.desc()).limit(1).scalar()
+                if not latest:
+                    logger.info("Redline sweep: no ERP data — skip")
+                    return []
+                as_of = min(latest, today_ist())
+            elif clock:
                 as_of = week_sunday(clock)
             else:
-                logger.info("Redline sweep: no replay clock — skip (avoid future leak)")
+                logger.info("Redline sweep: replay mode with no replay clock — skip (avoid future leak)")
                 return []
         last = get_last_redline_check(session)
         fires = evaluate_rules(session, rules, as_of=as_of, last_check_date=last)
@@ -173,15 +199,27 @@ def get_scheduler() -> BackgroundScheduler | None:
     return _scheduler
 
 
+def tenant_job_id(job_id: str) -> str:
+    from cfo_agent.tenancy import current_tenant_id
+
+    tid = current_tenant_id()
+    return f"{tid}:{job_id}" if tid else job_id
+
+
 def upsert_job(job_id: str, fn, cron: str) -> None:
-    """Register or replace a cron job. No-op when scheduler is not started."""
+    """Register or replace a cron job for the current tenant. No-op when the
+    scheduler is not started."""
+    from cfo_agent.tenancy import current_tenant_id
+
     sched = get_scheduler()
     if sched is None:
         return
     settings = get_settings()
     tz = ZoneInfo(settings.timezone)
+    tid = current_tenant_id()
+    job_id = tenant_job_id(job_id)
     sched.add_job(
-        fn,
+        leased(job_id, fn, tenant=tid or None, per_tenant=False),
         CronTrigger(**_parse_cron(cron), timezone=tz),
         id=job_id,
         replace_existing=True,
@@ -194,9 +232,56 @@ def remove_job(job_id: str) -> None:
     if sched is None:
         return
     try:
-        sched.remove_job(job_id)
+        sched.remove_job(tenant_job_id(job_id))
     except Exception:  # noqa: BLE001 — JobLookupError and friends
         pass
+
+
+def leased(job_id: str, fn, *, tenant: str | None = None, per_tenant: bool = True):
+    """Run `fn` only on the worker holding the scheduler lease, and record the run.
+    Global jobs run once per tenant (each tenant DB has its own lease); a job bound
+    to `tenant` runs only there."""
+    import functools
+
+    from cfo_agent.tenancy import for_each_tenant, tenant_context
+
+    def once(*args, **kwargs):
+        from cfo_agent.lease import holds_lease, note_job_run
+
+        if not holds_lease():
+            logger.debug("Job %s skipped: another worker holds the scheduler lease", job_id)
+            return None
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            note_job_run(job_id)
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if tenant:
+            with tenant_context(tenant):
+                return once(*args, **kwargs)
+        if per_tenant:
+            return for_each_tenant(once, *args, **kwargs)
+        return once(*args, **kwargs)
+
+    return wrapper
+
+
+def job_lease_heartbeat() -> None:
+    from cfo_agent.tenancy import for_each_tenant
+
+    for_each_tenant(_heartbeat_one)
+
+
+def _heartbeat_one() -> None:
+    from cfo_agent.lease import OWNER_ID, acquire_or_renew
+
+    try:
+        held = acquire_or_renew()
+        logger.debug("Scheduler lease %s by %s", "held" if held else "standby", OWNER_ID)
+    except Exception:  # noqa: BLE001
+        logger.exception("Scheduler lease heartbeat failed")
 
 
 def start_scheduler() -> BackgroundScheduler:
@@ -205,21 +290,23 @@ def start_scheduler() -> BackgroundScheduler:
         return _scheduler
     settings = get_settings()
     tz = ZoneInfo(settings.timezone)
+    job_lease_heartbeat()  # take the lease now if it is free
     sched = BackgroundScheduler(timezone=tz)
-    sched.add_job(job_digest, CronTrigger(**_parse_cron(settings.digest_cron), timezone=tz), id="digest")
+    sched.add_job(job_lease_heartbeat, "interval", seconds=60, id="lease")
+    sched.add_job(leased("digest", job_digest), CronTrigger(**_parse_cron(settings.digest_cron), timezone=tz), id="digest")
     sched.add_job(
-        job_redline_sweep,
+        leased("redline", job_redline_sweep),
         CronTrigger(**_parse_cron(settings.redline_cron), timezone=tz),
         id="redline",
     )
-    sched.add_job(job_consolidation_debounce, "interval", minutes=2, id="consolidation")
+    sched.add_job(leased("consolidation", job_consolidation_debounce), "interval", minutes=2, id="consolidation")
     # News refresh — only when scheduler is started (never in tests)
     news_cron = getattr(settings, "news_cron", "30 7 * * *")
     try:
         from cfo_agent.news import job_news_refresh
 
         sched.add_job(
-            job_news_refresh,
+            leased("news", job_news_refresh),
             CronTrigger(**_parse_cron(news_cron), timezone=tz),
             id="news",
         )
