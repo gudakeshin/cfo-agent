@@ -48,7 +48,7 @@ export interface DigestItem {
   citations: Record<string, string[]> | CitationRef[] | string[]
   is_red_line: boolean
   priority_score: number
-  score_decomp: (Record<string, number | string | null> & { context?: SignalContext }) | null
+  score_decomp: (Record<string, unknown> & { context?: SignalContext; drivers?: Drivers | null }) | null
   relationship_ids: string[]
   verification?: {
     unverified_figures?: string[]
@@ -555,4 +555,22 @@ export interface ImportedFileRow {
   error_count: number
   errors: { line: number; column: string; error: string }[]
   imported_at: string
+}
+
+/** What moved a metric: largest contributors, computed when the digest was generated. */
+export interface DriverRow {
+  label: string
+  group: string
+  current_paise: number
+  previous_paise: number | null
+  change_paise: number | null
+  citation: string | null
+  note: string
+}
+
+export interface Drivers {
+  title: string
+  basis: string
+  rows: DriverRow[]
+  reconciliation?: Record<string, number> | null
 }

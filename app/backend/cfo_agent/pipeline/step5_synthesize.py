@@ -53,7 +53,7 @@ def step5_synthesize_item(
             "delta_wow": s.delta_wow,
             "kra_ids": item.kra_ids,
             "lineage": s.lineage_json,
-            "score_decomp": item.score_decomp,
+            "score_decomp": {k: v for k, v in item.score_decomp.items() if k != "drivers"},
         }
     if item.rule_fire:
         payload["red_line"] = {
@@ -63,6 +63,10 @@ def step5_synthesize_item(
             "threshold": item.rule_fire.threshold,
             "evidence": _with_display_amounts(item.rule_fire.evidence),
         }
+
+    drivers = (item.score_decomp or {}).get("drivers")
+    if drivers:
+        payload["drivers"] = _with_display_amounts(drivers)
 
     if item.connections:
         payload["connections"] = [c.model_dump() for c in item.connections]
@@ -96,6 +100,11 @@ def step5_synthesize_item(
         "'what' and 'why' MUST each carry at least one citation. "
         "Only state figures that appear in ITEM (or in the cited records); do not derive new numbers. "
         "For money, quote the *_inr fields verbatim; never convert *_paise values yourself. "
+        "If ITEM.drivers is present it lists the records that actually moved this metric: in 'what', name the "
+        "one or two largest by label and amount and cite each row's `citation`; base 'action' on them. "
+        "Do not say they explain the whole move unless drivers.reconciliation shows it, and if "
+        "`not_in_feed_inr` is material say that part is unexplained by the records. "
+        "If there are no drivers, do not speculate about causes. "
         "If past_insights exist, reference continuity briefly.\n\n"
         f"ALLOWED_CITATIONS: {json.dumps(allowed_cites)}\n\n"
         f"ITEM:\n{json.dumps(payload, indent=2, default=str)}"

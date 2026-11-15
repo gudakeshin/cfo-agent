@@ -246,6 +246,11 @@ is ignored in multi-tenant mode. A tenant with no `email_to` gets no email: its 
   Sans (installed in the image) for the ₹ sign.
 - **Actions and meeting briefs**: anyone with the CFO role can track actions from insights and prepare a
   citation-checked brief for a board, audit committee, lender or investor meeting (about $0.05 each).
+- **What moved it** (insight cards): each surfaced metric carries a breakdown computed from records — customers
+  behind a receivables move, vendors behind payables, the week's largest cash flows, cost centres against their
+  8-week average, segments, unpaid invoices that fell due, open GST items. The AI is given these rows and must
+  cite them. For cash, the card states how much of the bank-balance change the receipts, payments and expenses
+  feed does not explain. Custom metrics have no breakdown. Digests made before this change do not show it.
 - **Pilot scorecard** (CFO menu): weeks the briefing was opened, insights surfaced, share given a verdict,
   and the success test — at least one insight acted on that the CFO had not already spotted. "Opened" counts
   views by users in the CFO role (any user when sign-in is off).

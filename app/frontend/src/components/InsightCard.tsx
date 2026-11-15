@@ -8,6 +8,7 @@ import { FeedbackButtons } from './FeedbackButtons'
 import { PriorityTag } from './PriorityTag'
 import { Sparkline } from './Sparkline'
 import { ContextChips } from './ContextChips'
+import { DriverTable } from './DriverTable'
 import { TrackAction } from './TrackAction'
 
 function citationId(c: string | { id?: string; citation_id?: string }): string {
@@ -71,6 +72,8 @@ export function InsightCard({ item, feedback, onFeedbackChange, onDrilldown, his
           </div>
         )}
       </div>
+
+      <DriverTable drivers={item.score_decomp?.drivers} onCite={setActiveCitation} />
 
       {citations.length > 0 && (
         <div className="citations" aria-label="Evidence">

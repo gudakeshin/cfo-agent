@@ -21,7 +21,35 @@ def allowed_citations_for(item: FilterItem) -> list[str]:
             if "citation" in ev:
                 allowed.append(ev["citation"])
         allowed.extend(evidence.get("lineage") or [])
+    from cfo_agent.drivers import driver_citations
+
+    allowed.extend(driver_citations((item.score_decomp or {}).get("drivers")))
     return list(dict.fromkeys(allowed))
+
+
+def _driver_sentence(item: FilterItem) -> tuple[str, list[str]]:
+    """One factual sentence naming the largest contributor, with its citation."""
+    from cfo_agent.timeutil import format_inr
+
+    drivers = (item.score_decomp or {}).get("drivers") or {}
+    rows = drivers.get("rows") or []
+    if not rows:
+        return "", []
+    r = rows[0]
+    recon = drivers.get("reconciliation") or {}
+    if recon.get("not_in_feed_paise") is not None:
+        # Cash: the largest single flow is not "the cause"; say what the records
+        # net to and how much of the balance change they leave unexplained.
+        text = (f" Recorded receipts, payments and expenses net to {format_inr(recon['net_recorded_flow_paise'])}; "
+                f"{format_inr(recon['not_in_feed_paise'])} of the {format_inr(recon['balance_change_paise'])} "
+                "balance change is not in the feed.")
+        return text, [r["citation"]] if r.get("citation") else []
+    if r.get("change_paise") is not None:
+        text = (f" Largest contributor: {r['label']} ({r['group']}), {format_inr(r['current_paise'])} "
+                f"against {format_inr(r['previous_paise'])} before.")
+    else:
+        text = f" Largest contributor: {r['label']} ({r['group']}), {format_inr(r['current_paise'])}."
+    return text, [r["citation"]] if r.get("citation") else []
 
 
 def _label(metric_id: str | None) -> str:
@@ -60,9 +88,10 @@ def deterministic_synthesis(item: FilterItem) -> SynthesizeItemOutput:
         action = "Ask the KRA owner to explain the movement using the cited records."
 
     connects_text = "; ".join(c.narrative for c in item.connections) or "No cross-KRA connection identified."
+    driver_text, driver_cites = _driver_sentence(item)
     return SynthesizeItemOutput(
         title=title,
-        what=SectionBlock(text=what, citations=primary or evidence),
+        what=SectionBlock(text=what + driver_text, citations=(primary or evidence) + driver_cites),
         why=SectionBlock(text=why, citations=primary or evidence),
         connects=SectionBlock(text=connects_text, citations=[]),
         action=SectionBlock(text=action, citations=evidence),

@@ -176,5 +176,14 @@ def step4_filter(
     # Red lines first, then by score
     items.sort(key=lambda i: (0 if i.is_red_line else 1, -i.priority_score))
     items = items[:max_items]
+    # What moved each surfaced metric (by customer, vendor, cost centre…), computed
+    # here so the synthesis explains the move from records instead of guessing.
+    from cfo_agent.drivers import compute_drivers
+
+    for it in items:
+        metric = it.weighted.mapped.signal.metric_id if it.weighted else (it.rule_fire.metric if it.rule_fire else None)
+        drivers = compute_drivers(session, metric, week)
+        if drivers:
+            it.score_decomp = {**it.score_decomp, "drivers": drivers}
     empty_bar = len(items) == 0
     return items, empty_bar
