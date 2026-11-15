@@ -246,6 +246,12 @@ is ignored in multi-tenant mode. A tenant with no `email_to` gets no email: its 
   Sans (installed in the image) for the ₹ sign.
 - **Actions and meeting briefs**: anyone with the CFO role can track actions from insights and prepare a
   citation-checked brief for a board, audit committee, lender or investor meeting (about $0.05 each).
+- **Pilot scorecard** (CFO menu): weeks the briefing was opened, insights surfaced, share given a verdict,
+  and the success test — at least one insight acted on that the CFO had not already spotted. "Opened" counts
+  views by users in the CFO role (any user when sign-in is off).
+- **Metrics with no data are blank, never estimated.** Segments and cost centres are read from the client's
+  own revenue and expense rows. Close cycle needs `gl_entries`; unreconciled items and board-pack readiness
+  stay blank until a reconciliation feed exists. `free_cash_flow_cr` is net operating cash flow (no capex).
 - **Memory safety**: notes the model infers from conversations are sanitised, labelled untrusted in every
   prompt, and can never overwrite the CFO office's own notes (`cfo_notes` block, Memory page).
 

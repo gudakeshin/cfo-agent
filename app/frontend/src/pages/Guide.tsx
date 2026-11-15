@@ -69,7 +69,7 @@ const TERMS: { term: string; body: React.ReactNode }[] = [
       <>
         <strong>Acted on</strong>, <strong>Useful</strong> or <strong>Set aside</strong>, plus “Already knew”.
         The pilot&apos;s success test is at least one insight a quarter you acted on and had not already
-        spotted. See <Link to="/feedback">Feedback log</Link>.
+        spotted. See <Link to="/feedback">Pilot scorecard</Link>.
       </>
     ),
   },

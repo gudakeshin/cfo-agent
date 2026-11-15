@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
+import { extra } from '../api/extra'
 import { LearningPanel } from '../components/LearningPanel'
 import { RedLineBacktest } from '../components/RedLineBacktest'
 import type { Kra, PreviewRanking, RedLine, RiskAppetite, WeightingContent } from '../api/types'
@@ -9,10 +10,12 @@ import { useMetrics } from '../hooks/useMetrics'
 import { formatMetric } from '../utils/format'
 import { formatWeekLabel } from '../utils/weeks'
 
-const EVENT_TYPES = [
+// Fallback until the list of event types found in the client's data has loaded.
+const DEFAULT_EVENT_TYPES = [
   { value: 'show_cause_notice', label: 'GST show-cause notice' },
   { value: 'itc_mismatch', label: 'GST input-credit mismatch' },
 ]
+type EventType = { value: string; label: string }
 
 const APPETITE_HELP: Record<RiskAppetite, string> = {
   low: 'Surface more — even modest moves (Watch and above).',
@@ -20,9 +23,14 @@ const APPETITE_HELP: Record<RiskAppetite, string> = {
   high: 'Surface only High priority moves.',
 }
 
-function ruleSentence(rl: RedLine, metricLabel: (id: string) => string, unit: (id: string) => string): string {
+function ruleSentence(
+  rl: RedLine,
+  metricLabel: (id: string) => string,
+  unit: (id: string) => string,
+  eventTypes: EventType[] = DEFAULT_EVENT_TYPES,
+): string {
   if (rl.type === 'event') {
-    const ev = EVENT_TYPES.find((e) => e.value === rl.event_type)?.label ?? rl.event_type ?? 'event'
+    const ev = eventTypes.find((e) => e.value === rl.event_type)?.label ?? rl.event_type ?? 'event'
     return `Alert on any new ${ev}.`
   }
   const op = OPERATORS.find((o) => o.value === rl.operator)?.words ?? rl.operator
@@ -103,6 +111,11 @@ export function WeightingEditor() {
   const [confirmPreset, setConfirmPreset] = useState<string | null>(null)
   const [presetNote, setPresetNote] = useState<string | null>(null)
   const { byId: metricById, metrics } = useMetrics()
+  const { data: eventTypes = DEFAULT_EVENT_TYPES } = useQuery<EventType[]>({
+    queryKey: ['redline-event-types'],
+    queryFn: extra.eventTypes,
+    staleTime: 5 * 60_000,
+  })
   const metricLabel = (id: string) => metricById.get(id)?.label ?? id
   const metricUnit = (id: string) => metricById.get(id)?.unit ?? ''
 
@@ -470,7 +483,10 @@ export function WeightingEditor() {
                           updateRedLine(index, { table: 'erp_gst_events', event_type: e.target.value })
                         }
                       >
-                        {EVENT_TYPES.map((ev) => (
+                        {(eventTypes.some((ev) => ev.value === rl.event_type) || !rl.event_type
+                          ? eventTypes
+                          : [...eventTypes, { value: rl.event_type, label: rl.event_type }]
+                        ).map((ev) => (
                           <option key={ev.value} value={ev.value}>
                             {ev.label}
                           </option>
@@ -491,7 +507,7 @@ export function WeightingEditor() {
               </tr>
               <tr className="redline-sentence-row">
                 <td colSpan={5}>
-                  {ruleSentence(rl, metricLabel, metricUnit)}
+                  {ruleSentence(rl, metricLabel, metricUnit, eventTypes)}
                   <RedLineBacktest rule={rl} unit={rl.metric ? metricUnit(rl.metric) : ''} />
                 </td>
               </tr>

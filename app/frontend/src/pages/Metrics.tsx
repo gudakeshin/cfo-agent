@@ -287,7 +287,7 @@ export function Metrics() {
             .filter((m) => !m.custom)
             .map((m) => (
               <li key={m.id}>
-                {m.label} <span className="toolbar-hint">{m.id} · {m.unit}{m.proxy ? ' · proxy until the client feed supports it' : ''}</span>
+                {m.label} <span className="toolbar-hint">{m.id} · {m.unit}{m.proxy ? ' · no value until its data feed is connected' : ''}</span>
               </li>
             ))}
         </ul>

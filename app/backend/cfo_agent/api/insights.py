@@ -393,3 +393,24 @@ def backtest_red_line(body: BacktestBody):
         }
     finally:
         session.close()
+
+
+EVENT_LABELS = {
+    "show_cause_notice": "GST show-cause notice",
+    "itc_mismatch": "GST input-credit mismatch",
+}
+
+
+@router.get("/redlines/event-types")
+def red_line_event_types():
+    """Event types a red line can watch: whatever the client's event feed contains
+    (plus the two standard GST ones, so a rule can be set before the first event)."""
+    session = get_session()
+    try:
+        found = {t for (t,) in session.query(ErpGstEvent.event_type).distinct() if t}
+        return [
+            {"value": t, "label": EVENT_LABELS.get(t) or t.replace("_", " ").capitalize(), "in_data": t in found}
+            for t in sorted(found | set(EVENT_LABELS))
+        ]
+    finally:
+        session.close()

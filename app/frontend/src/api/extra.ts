@@ -69,6 +69,45 @@ export interface Backtest {
   event_types: string[]
 }
 
+export interface EventTypeOption {
+  value: string
+  label: string
+  in_data: boolean
+}
+
+// ── pilot scorecard ──────────────────────────────────────────────────────────
+export interface ScorecardWeek {
+  week: string
+  digest_id: number
+  surfaced: number
+  red_lines: number
+  reviewed: number
+  acted_on: number
+  useful: number
+  set_aside: number
+  already_knew: number
+  novel_acted_on: number
+  opens: number
+}
+
+export interface Scorecard {
+  weeks: ScorecardWeek[]
+  totals: {
+    digests: number
+    weeks_opened: number
+    surfaced: number
+    reviewed: number
+    review_rate_pct: number | null
+    acted_on: number
+    useful: number
+    set_aside: number
+    already_knew: number
+    novel_acted_on: number
+    useful_rate_pct: number | null
+    success_test_met: boolean
+  } | null
+}
+
 // ── custom metrics ───────────────────────────────────────────────────────────
 export interface MetricInput {
   agg: string
@@ -191,6 +230,8 @@ export const extra = {
   getShared: (token: string) => request<SharedDigest>(`/shared/${encodeURIComponent(token)}`),
 
   heatmap: (n = 13) => request<Heatmap>(`/insights/heatmap?n=${n}`),
+  scorecard: () => request<Scorecard>('/feedback/scorecard'),
+  eventTypes: () => request<EventTypeOption[]>('/redlines/event-types'),
   backtest: (body: { type: string; metric?: string; operator?: string; threshold?: number; event_type?: string }) =>
     post<Backtest>('/redlines/backtest', body),
   entities: () => request<EntityView>('/insights/entities'),

@@ -90,7 +90,7 @@ const NAV_PRIMARY = [
   { to: '/actions', label: 'Actions', icon: ICON_ACTIONS },
   { to: '/briefs', label: 'Meeting briefs', icon: ICON_BRIEFS },
   { to: '/news', label: 'Regulatory feed', icon: ICONS.news },
-  { to: '/feedback', label: 'Feedback log', icon: ICONS.feedback },
+  { to: '/feedback', label: 'Pilot scorecard', icon: ICONS.feedback },
   { to: '/guide', label: 'Guide', icon: ICON_GUIDE },
 ]
 

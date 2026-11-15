@@ -162,6 +162,38 @@ def cash_positions(session: Session, end: date, *, include_restricted: bool = Fa
     return out
 
 
+def _dimension_values(session: Session, model, col, date_col, start: date, end: date) -> list[str]:
+    """Distinct values of a dimension (segment, cost centre…) present in the client's
+    own data for a window — never a fixed list, which would silently miss a client
+    whose segments or cost centres are named differently."""
+    q = (
+        session.query(col)
+        .filter(date_col >= start, date_col <= end, *_entity_conds(session, model))
+        .distinct()
+    )
+    return sorted(v for (v,) in q if v)
+
+
+def _external_receipts(session: Session, start: date, end: date):
+    """Receipts in a window from external (non-intercompany) customers, in scope."""
+    return (
+        session.query(ErpReceipt)
+        .join(ErpSalesInvoice, ErpSalesInvoice.id == ErpReceipt.invoice_id)
+        .join(ErpCustomer, ErpCustomer.id == ErpSalesInvoice.customer_id)
+        .filter(ErpReceipt.receipt_date >= start, ErpReceipt.receipt_date <= end,
+                ErpCustomer.is_intercompany.is_(False), *_entity_conds(session, ErpSalesInvoice))
+    )
+
+
+def _external_payments(session: Session, start: date, end: date):
+    return (
+        session.query(ErpPayment)
+        .join(ErpPurchaseInvoice, ErpPurchaseInvoice.id == ErpPayment.purchase_invoice_id)
+        .filter(ErpPayment.payment_date >= start, ErpPayment.payment_date <= end,
+                ErpPurchaseInvoice.is_intercompany.is_(False), *_entity_conds(session, ErpPurchaseInvoice))
+    )
+
+
 def _cid(table: str, business_key: str) -> str:
     return f"erp:{table}:{business_key}"
 
@@ -216,16 +248,16 @@ def compute_dpo(session: Session, week: str) -> MetricResult:
     start = end - timedelta(days=89)
     rows = open_payables(session, end)
     ap = sum(rem for _, rem in rows)
-    cogs_proxy = (
-        session.query(func.coalesce(func.sum(ErpPayment.amount_paise), 0))
-        .join(ErpPurchaseInvoice, ErpPurchaseInvoice.id == ErpPayment.purchase_invoice_id)
-        .filter(ErpPayment.payment_date >= start, ErpPayment.payment_date <= end,
+    # DPO = payables / average daily credit purchases (trailing 90 days)
+    purchases = (
+        session.query(func.coalesce(func.sum(ErpPurchaseInvoice.amount_paise), 0))
+        .filter(ErpPurchaseInvoice.invoice_date >= start, ErpPurchaseInvoice.invoice_date <= end,
                 ErpPurchaseInvoice.is_intercompany.is_(False), *_entity_conds(session, ErpPurchaseInvoice))
         .scalar()
     )
-    if not cogs_proxy:
-        return unavailable("dpo_days", "days", "no payments in trailing 90 days")
-    dpo = ap / (int(cogs_proxy) / 90.0)
+    if not purchases:
+        return unavailable("dpo_days", "days", "no purchases in trailing 90 days")
+    dpo = ap / (int(purchases) / 90.0)
     rows.sort(key=lambda x: (x[0].invoice_date, x[0].id))
     lineage = [_cid("erp_purchase_invoices", p.business_key) for p, _ in rows]
     return MetricResult("dpo_days", round(dpo, 2), lineage=lineage[:40], unit="days")
@@ -237,7 +269,9 @@ def compute_cash(session: Session, week: str) -> MetricResult:
     end = as_of_end(week)
     positions = cash_positions(session, end)
     if not positions:
-        return MetricResult("cash_balance_cr", 0.0, lineage=[], unit="Cr")
+        # No bank balance on record is "unknown", not "zero cash" — a zero would
+        # trip every cash red line.
+        return unavailable("cash_balance_cr", "Cr", "no cash balances on or before this week")
     total = sum(r.balance_paise for r, _ in positions)
     return MetricResult(
         "cash_balance_cr",
@@ -250,7 +284,7 @@ def compute_cash(session: Session, week: str) -> MetricResult:
 @register("covenant_headroom_cr")
 def compute_covenant_headroom(session: Session, week: str) -> MetricResult:
     cash = compute_cash(session, week)
-    if not cash.lineage:
+    if not cash.available:
         return unavailable("covenant_headroom_cr", "Cr", "no cash data")
     # Covenant threshold comes from the ERP covenant register (fallback ₹20 Cr)
     from cfo_agent.models import ErpCovenant
@@ -392,9 +426,12 @@ def compute_cc_variance(session: Session, week: str) -> MetricResult:
     """Max cost-center spend vs 8-week trailing average, as %."""
     end = as_of_end(week)
     start = week_monday(week)
-    hist_start = end - timedelta(days=56)
-    centers = ["Finance", "Sales", "Ops", "Admin", "Plant"]
+    # The 8 full weeks before this one (the old `end - 56` window held only 7 weeks
+    # and a day but was averaged over 8, overstating every variance by ~12%).
+    hist_start = start - timedelta(days=56)
+    centers = _dimension_values(session, ErpExpense, ErpExpense.cost_center, ErpExpense.expense_date, hist_start, end)
     max_var = 0.0
+    compared = False
     lineage: list[str] = []
     for cc in centers:
         cur = (
@@ -419,6 +456,7 @@ def compute_cc_variance(session: Session, week: str) -> MetricResult:
         )
         if not hist:
             continue  # no baseline for this cost center yet — variance undefined
+        compared = True
         weekly_avg = int(hist) / 8.0
         var = 100.0 * (int(cur) - weekly_avg) / weekly_avg
         if abs(var) >= abs(max_var):
@@ -435,6 +473,8 @@ def compute_cc_variance(session: Session, week: str) -> MetricResult:
                 .all()
             )
             lineage = [_cid("erp_expenses", e.business_key) for e in rows]
+    if not compared:
+        return unavailable("cost_center_variance_pct", "%", "no cost centre has an 8-week baseline")
     return MetricResult("cost_center_variance_pct", round(max_var, 2), lineage=lineage, unit="%")
 
 
@@ -443,7 +483,7 @@ def compute_close_cycle(session: Session, week: str) -> MetricResult:
     """Days from the latest closed period's end to its last GL posting.
 
     A period counts as closed once 10 days have passed since its end. Without GL
-    data the metric falls back to a fixed proxy (flagged `proxy` in METRIC_META)."""
+    data the metric is unavailable — it is never estimated."""
     end = as_of_end(week)
     pe = (
         session.query(func.max(ErpGlEntry.period_end))
@@ -461,62 +501,36 @@ def compute_close_cycle(session: Session, week: str) -> MetricResult:
             days = max(0, (last.posting_date - pe).days)
             return MetricResult("close_cycle_days", float(days),
                                 lineage=[_cid("erp_gl_entries", last.business_key)], unit="days")
-    wi = end.isocalendar().week
-    value = 4.0 + (0.3 if wi % 4 == 0 else 0.0)
-    cash = session.query(ErpCashDaily).filter(ErpCashDaily.as_of_date == end).first()
-    lineage = [_cid("erp_cash_daily", cash.business_key)] if cash else []
-    return MetricResult("close_cycle_days", value, lineage=lineage, unit="days")
+    return unavailable("close_cycle_days", "days", "no general-ledger postings for a closed period")
 
 
 @register("unreconciled_items")
 def compute_unreconciled(session: Session, week: str) -> MetricResult:
-    end = as_of_end(week)
-    open_ar = (
-        session.query(ErpSalesInvoice)
-        .filter(ErpSalesInvoice.invoice_date <= end, ErpSalesInvoice.status != "paid")
-        .count()
-    )
-    # Use a scaled proxy
-    value = float(min(open_ar // 5, 40))
-    rows = (
-        session.query(ErpSalesInvoice)
-        .filter(ErpSalesInvoice.invoice_date <= end, ErpSalesInvoice.status != "paid")
-        .limit(20)
-        .all()
-    )
-    return MetricResult(
-        "unreconciled_items",
-        value,
-        lineage=[_cid("erp_sales_invoices", r.business_key) for r in rows],
-        unit="count",
-    )
+    """Needs a reconciliation feed (bank-statement lines or unapplied receipts) that
+    the data model does not carry yet. Until a client supplies one this metric is
+    unavailable: it produces no signal and is never estimated from other numbers."""
+    return unavailable("unreconciled_items", "count", "no reconciliation feed connected")
 
 
 @register("collections_coverage_pct")
 def compute_collections_coverage(session: Session, week: str) -> MetricResult:
+    """Cash collected in the week ÷ invoice value falling due in the week (external
+    customers only, in entity scope)."""
     end = as_of_end(week)
     start = week_monday(week)
-    collected = (
-        session.query(func.coalesce(func.sum(ErpReceipt.amount_paise), 0))
-        .filter(ErpReceipt.receipt_date >= start, ErpReceipt.receipt_date <= end)
+    receipts_q = _external_receipts(session, start, end)
+    collected = receipts_q.with_entities(func.coalesce(func.sum(ErpReceipt.amount_paise), 0)).scalar()
+    due_amt = (
+        session.query(func.coalesce(func.sum(ErpSalesInvoice.amount_paise), 0))
+        .join(ErpCustomer, ErpCustomer.id == ErpSalesInvoice.customer_id)
+        .filter(ErpSalesInvoice.due_date >= start, ErpSalesInvoice.due_date <= end,
+                ErpCustomer.is_intercompany.is_(False), *_entity_conds(session, ErpSalesInvoice))
         .scalar()
     )
-    # due this week: invoices with due_date in week
-    due = (
-        session.query(ErpSalesInvoice)
-        .filter(ErpSalesInvoice.due_date >= start, ErpSalesInvoice.due_date <= end)
-        .all()
-    )
-    due_amt = sum(i.amount_paise for i in due)
     if not due_amt:
         return unavailable("collections_coverage_pct", "%", "nothing fell due this week")
-    pct = 100.0 * int(collected) / due_amt
-    receipts = (
-        session.query(ErpReceipt)
-        .filter(ErpReceipt.receipt_date >= start, ErpReceipt.receipt_date <= end)
-        .limit(30)
-        .all()
-    )
+    pct = 100.0 * int(collected) / int(due_amt)
+    receipts = receipts_q.order_by(ErpReceipt.amount_paise.desc(), ErpReceipt.id).limit(30).all()
     return MetricResult(
         "collections_coverage_pct",
         round(pct, 2),
@@ -529,75 +543,72 @@ def compute_collections_coverage(session: Session, week: str) -> MetricResult:
 def compute_fcf(session: Session, week: str) -> MetricResult:
     end = as_of_end(week)
     start = week_monday(week)
-    receipts = (
-        session.query(func.coalesce(func.sum(ErpReceipt.amount_paise), 0))
-        .filter(ErpReceipt.receipt_date >= start, ErpReceipt.receipt_date <= end)
-        .scalar()
-    )
-    payments = (
-        session.query(func.coalesce(func.sum(ErpPayment.amount_paise), 0))
-        .filter(ErpPayment.payment_date >= start, ErpPayment.payment_date <= end)
-        .scalar()
-    )
+    # Net operating cash flow: customer receipts less supplier payments and expenses
+    # (external parties only). Capex is not in the data model, so this is not true
+    # free cash flow and is labelled accordingly.
+    receipts = _external_receipts(session, start, end).with_entities(
+        func.coalesce(func.sum(ErpReceipt.amount_paise), 0)).scalar()
+    payments = _external_payments(session, start, end).with_entities(
+        func.coalesce(func.sum(ErpPayment.amount_paise), 0)).scalar()
     expenses = (
         session.query(func.coalesce(func.sum(ErpExpense.amount_paise), 0))
         .filter(ErpExpense.expense_date >= start, ErpExpense.expense_date <= end, *_entity_conds(session, ErpExpense))
         .scalar()
     )
     fcf = int(receipts) - int(payments) - int(expenses)
-    cash = compute_cash(session, week)
+    top_in = _external_receipts(session, start, end).order_by(ErpReceipt.amount_paise.desc(), ErpReceipt.id).limit(10).all()
+    top_out = _external_payments(session, start, end).order_by(ErpPayment.amount_paise.desc(), ErpPayment.id).limit(10).all()
+    lineage = [_cid("erp_receipts", r.business_key) for r in top_in] + [_cid("erp_payments", r.business_key) for r in top_out]
+    if not lineage and not expenses:
+        return unavailable("free_cash_flow_cr", "Cr", "no cash movements this week")
     return MetricResult(
         "free_cash_flow_cr",
         round(paise_to_crore(fcf), 2),
-        lineage=cash.lineage,
+        lineage=lineage or compute_cash(session, week).lineage,
         unit="Cr",
+    )
+
+
+def _segment_revenue(session: Session, seg: str, start: date, end: date) -> int:
+    return int(
+        session.query(func.coalesce(func.sum(ErpRevenueDaily.amount_paise), 0))
+        .filter(ErpRevenueDaily.segment == seg, ErpRevenueDaily.as_of_date >= start,
+                ErpRevenueDaily.as_of_date <= end, *_entity_conds(session, ErpRevenueDaily))
+        .scalar()
+    )
+
+
+def _segment_rows(session: Session, seg: str, start: date, end: date) -> list[ErpRevenueDaily]:
+    return (
+        session.query(ErpRevenueDaily)
+        .filter(ErpRevenueDaily.segment == seg, ErpRevenueDaily.as_of_date >= start,
+                ErpRevenueDaily.as_of_date <= end, *_entity_conds(session, ErpRevenueDaily))
+        .order_by(ErpRevenueDaily.as_of_date, ErpRevenueDaily.id)
+        .all()
     )
 
 
 @register("segment_revenue_growth_pct")
 def compute_segment_growth(session: Session, week: str) -> MetricResult:
-    """Best segment WoW growth % (and lineage from that segment's revenue rows)."""
+    """Best segment WoW growth % (and lineage from that segment's revenue rows).
+    Segments come from the client's revenue data; one with no prior-week revenue
+    has no growth rate and is skipped."""
     end = as_of_end(week)
     start = week_monday(week)
     prev_end = start - timedelta(days=1)
     prev_start = prev_end - timedelta(days=6)
-    best = -999.0
-    lineage: list[str] = []
-    for seg in ["Consumer", "Industrial", "Exports"]:
-        cur = (
-            session.query(func.coalesce(func.sum(ErpRevenueDaily.amount_paise), 0))
-            .filter(
-                ErpRevenueDaily.segment == seg,
-                *_entity_conds(session, ErpRevenueDaily),
-                ErpRevenueDaily.as_of_date >= start,
-                ErpRevenueDaily.as_of_date <= end,
-            )
-            .scalar()
-        )
-        prev = (
-            session.query(func.coalesce(func.sum(ErpRevenueDaily.amount_paise), 0))
-            .filter(
-                ErpRevenueDaily.segment == seg,
-                *_entity_conds(session, ErpRevenueDaily),
-                ErpRevenueDaily.as_of_date >= prev_start,
-                ErpRevenueDaily.as_of_date <= prev_end,
-            )
-            .scalar()
-        )
-        growth = 100.0 * (int(cur) - int(prev)) / int(prev) if prev else 0.0
-        if growth >= best:
-            best = growth
-            rows = (
-                session.query(ErpRevenueDaily)
-                .filter(
-                    ErpRevenueDaily.segment == seg,
-                *_entity_conds(session, ErpRevenueDaily),
-                    ErpRevenueDaily.as_of_date >= start,
-                    ErpRevenueDaily.as_of_date <= end,
-                )
-                .all()
-            )
-            lineage = [_cid("erp_revenue_daily", r.business_key) for r in rows]
+    best: float | None = None
+    best_seg = None
+    for seg in _dimension_values(session, ErpRevenueDaily, ErpRevenueDaily.segment, ErpRevenueDaily.as_of_date, prev_start, end):
+        prev = _segment_revenue(session, seg, prev_start, prev_end)
+        if not prev:
+            continue
+        growth = 100.0 * (_segment_revenue(session, seg, start, end) - prev) / prev
+        if best is None or growth >= best:
+            best, best_seg = growth, seg
+    if best is None:
+        return unavailable("segment_revenue_growth_pct", "%", "no segment has revenue in both weeks")
+    lineage = [_cid("erp_revenue_daily", r.business_key) for r in _segment_rows(session, best_seg, start, end)]
     return MetricResult("segment_revenue_growth_pct", round(best, 2), lineage=lineage, unit="%")
 
 
@@ -605,41 +616,27 @@ def compute_segment_growth(session: Session, week: str) -> MetricResult:
 def compute_rev_concentration(session: Session, week: str) -> MetricResult:
     end = as_of_end(week)
     start = week_monday(week)
-    totals = {}
-    lineage: list[str] = []
-    for seg in ["Consumer", "Industrial", "Exports"]:
-        cur = (
-            session.query(func.coalesce(func.sum(ErpRevenueDaily.amount_paise), 0))
-            .filter(
-                ErpRevenueDaily.segment == seg,
-                *_entity_conds(session, ErpRevenueDaily),
-                ErpRevenueDaily.as_of_date >= start,
-                ErpRevenueDaily.as_of_date <= end,
-            )
-            .scalar()
-        )
-        totals[seg] = int(cur)
-    grand = sum(totals.values()) or 1
+    totals = {
+        seg: _segment_revenue(session, seg, start, end)
+        for seg in _dimension_values(session, ErpRevenueDaily, ErpRevenueDaily.segment, ErpRevenueDaily.as_of_date, start, end)
+    }
+    grand = sum(totals.values())
+    if grand <= 0:
+        return unavailable("revenue_concentration_pct", "%", "no revenue this week")
     top_seg = max(totals, key=totals.get)
     pct = 100.0 * totals[top_seg] / grand
-    rows = (
-        session.query(ErpRevenueDaily)
-        .filter(
-            ErpRevenueDaily.segment == top_seg,
-            ErpRevenueDaily.as_of_date >= start,
-            ErpRevenueDaily.as_of_date <= end,
-        )
-        .all()
-    )
-    lineage = [_cid("erp_revenue_daily", r.business_key) for r in rows]
+    lineage = [_cid("erp_revenue_daily", r.business_key) for r in _segment_rows(session, top_seg, start, end)]
     return MetricResult("revenue_concentration_pct", round(pct, 2), lineage=lineage, unit="%")
 
 
 @register("board_pack_readiness_score")
 def compute_board_pack(session: Session, week: str) -> MetricResult:
-    """Proxy score 0-100 from close cycle + unreconciled."""
+    """Score 0-100 from close cycle + unreconciled items. Unavailable unless both
+    inputs are real — a score built on a missing input would be an invented number."""
     close = compute_close_cycle(session, week)
     unr = compute_unreconciled(session, week)
+    if not (close.available and unr.available):
+        return unavailable("board_pack_readiness_score", "score", "needs the close cycle and a reconciliation feed")
     score = max(0.0, 100.0 - close.value * 5 - unr.value)
     return MetricResult(
         "board_pack_readiness_score",
@@ -729,7 +726,7 @@ METRIC_META: dict[str, dict[str, str]] = {
     "close_cycle_days": {"label": "Month-end close cycle", "unit": "days"},
     "unreconciled_items": {"label": "Unreconciled items", "unit": "count"},
     "collections_coverage_pct": {"label": "Collections vs amount due", "unit": "%"},
-    "free_cash_flow_cr": {"label": "Free cash flow (week)", "unit": "₹ Cr"},
+    "free_cash_flow_cr": {"label": "Net operating cash flow (week)", "unit": "₹ Cr"},
     "segment_revenue_growth_pct": {"label": "Segment revenue growth", "unit": "%"},
     "revenue_concentration_pct": {"label": "Top-segment revenue share", "unit": "%"},
     "board_pack_readiness_score": {"label": "Board pack readiness", "unit": "score"},
@@ -749,7 +746,8 @@ def metric_meta(metric_id: str) -> dict:
     }
 
 
-# Metrics that are stand-ins until the client's data supports the real measure
+# Metrics that need a data feed the model does not carry yet. They stay in the
+# catalogue (so a KRA can reference them) but produce no signal until then.
 PROXY_METRICS = {"unreconciled_items", "board_pack_readiness_score"}
 
 
