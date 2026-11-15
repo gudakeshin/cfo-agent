@@ -106,3 +106,68 @@ def test_custom_metrics_and_inboxes_are_per_tenant(two_tenants, tmp_path):
 
         assert not COMPUTE_FNS["acme_only"](s, "2026-W40").available  # registered, but not zenith's
         s.close()
+
+
+def test_email_goes_only_to_the_current_tenants_recipients(two_tenants, tmp_path, monkeypatch):
+    """One client's digest must never reach another client's (or the global) address."""
+    import cfo_agent.digest.email as mail
+    from cfo_agent.settings import get_settings
+    from cfo_agent.tenancy import _load, tenant_context
+
+    cfg = tmp_path / "tenants.yaml"
+    cfg.write_text(cfg.read_text().replace(
+        "hosts: [acme.local]", "hosts: [acme.local]\n    email_to: [cfo@acme.test, fc@acme.test]\n    email_from: agent@acme.test"
+    ))
+    monkeypatch.setenv("EMAIL_TO", "global@operator.test")
+    monkeypatch.setenv("SMTP_HOST", "smtp.test")
+    get_settings.cache_clear()
+    _load.cache_clear()
+    monkeypatch.setattr(mail, "OUTBOX_DIR", tmp_path / "outbox")
+
+    sent = []
+
+    class FakeSMTP:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def starttls(self): pass
+        def login(self, *a): pass
+        def sendmail(self, sender, to, body): sent.append((sender, list(to)))
+
+    monkeypatch.setattr(mail.smtplib, "SMTP", FakeSMTP)
+
+    with tenant_context("acme"):
+        assert mail.deliver_html("<p>acme</p>", "s", "digest-2026-W40-1.html") == ("sent", None)
+    assert sent == [("agent@acme.test", ["cfo@acme.test", "fc@acme.test"])]
+
+    # Zenith has no recipients: nothing is sent (not even to the global EMAIL_TO),
+    # and its outbox file lands in its own folder.
+    with tenant_context("zenith"):
+        status, path = mail.deliver_html("<p>zenith</p>", "s", "digest-2026-W40-1.html")
+    assert status == "outbox" and len(sent) == 1
+    assert path == str(tmp_path / "outbox" / "zenith" / "digest-2026-W40-1.html")
+
+    # Same file name for another tenant does not overwrite it.
+    monkeypatch.delenv("SMTP_HOST")
+    get_settings.cache_clear()
+    with tenant_context("acme"):
+        _, acme_path = mail.deliver_html("<p>acme</p>", "s", "digest-2026-W40-1.html")
+    assert acme_path != path
+    assert "zenith" in (tmp_path / "outbox" / "zenith" / "digest-2026-W40-1.html").read_text()
+
+
+def test_single_tenant_email_uses_global_recipients(monkeypatch, tmp_path):
+    import cfo_agent.digest.email as mail
+    from cfo_agent.settings import get_settings
+    from cfo_agent.tenancy import _load
+
+    monkeypatch.delenv("TENANTS_FILE", raising=False)
+    monkeypatch.setenv("EMAIL_TO", "cfo@one.test, delegate@one.test")
+    get_settings.cache_clear()
+    _load.cache_clear()
+    monkeypatch.setattr(mail, "OUTBOX_DIR", tmp_path / "outbox")
+    try:
+        assert mail._recipients() == ["cfo@one.test", "delegate@one.test"]
+        assert mail.outbox_dir() == tmp_path / "outbox"
+    finally:
+        get_settings.cache_clear()

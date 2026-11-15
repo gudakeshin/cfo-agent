@@ -8,9 +8,12 @@ Off by default (single tenant). With TENANTS_FILE pointing at a YAML file:
         database_url: postgresql://cfo:…@db/acme
         hosts: [acme.cfo.example.com]
         users_file: /config/acme-users.yaml   # optional, AUTH_MODE=local
+        email_to: [cfo@acme.com]              # digest + red-line alert recipients
+        email_from: cfo-agent@acme.com        # optional, defaults to EMAIL_FROM
 
 every request is routed by its Host header to that tenant's database; unknown hosts
-get 404. Session cookies are bound to the tenant that issued them, file-drop inboxes
+get 404. Email goes only to the tenant's own `email_to` (the global EMAIL_TO is never
+used in multi-tenant mode; a tenant without recipients gets outbox files only). Session cookies are bound to the tenant that issued them, file-drop inboxes
 live under CSV_INBOX_DIR/<tenant>/, caches are keyed per tenant, and the worker runs
 every scheduled job once per tenant under that tenant's own scheduler lease.
 """
@@ -40,6 +43,16 @@ class Tenant:
     database_url: str
     hosts: tuple[str, ...] = field(default_factory=tuple)
     users_file: str | None = None
+    email_to: tuple[str, ...] = field(default_factory=tuple)
+    email_from: str | None = None
+
+
+def parse_recipients(value) -> tuple[str, ...]:
+    """Recipients from a YAML list or a comma-separated string; de-duplicated."""
+    if not value:
+        return ()
+    parts = value.split(",") if isinstance(value, str) else list(value)
+    return tuple(dict.fromkeys(a for a in (str(p).strip() for p in parts) if a))
 
 
 @lru_cache(maxsize=1)
@@ -62,7 +75,11 @@ def _load(path: str | None) -> dict[str, Tenant]:
         if dup:
             raise ValueError(f"Host(s) {', '.join(sorted(dup))} assigned to more than one tenant")
         hosts_seen |= set(hosts)
-        out[tid] = Tenant(tid, str(t.get("name") or tid), str(t["database_url"]), hosts, t.get("users_file"))
+        out[tid] = Tenant(
+            tid, str(t.get("name") or tid), str(t["database_url"]), hosts, t.get("users_file"),
+            email_to=parse_recipients(t.get("email_to")),
+            email_from=(str(t["email_from"]).strip() or None) if t.get("email_from") else None,
+        )
     return out
 
 

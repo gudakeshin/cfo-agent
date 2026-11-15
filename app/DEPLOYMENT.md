@@ -219,12 +219,18 @@ tenants:
     database_url: postgresql://cfo:…@db/acme
     hosts: [acme.cfo.example.com]
     users_file: /config/acme-users.yaml   # optional, AUTH_MODE=local
+    email_to: [cfo@acme.com, fc@acme.com] # digest and red-line alert recipients
+    email_from: cfo-agent@acme.com        # optional; defaults to EMAIL_FROM
 ```
 
 Requests are routed by the Host header (unknown hosts get 404). Each tenant has its own database
 (migrated on start), file-drop inbox (`CSV_INBOX_DIR/<tenant>/`), custom metrics, caches and scheduler
 lease; session cookies are bound to the tenant that issued them. The worker runs every scheduled job once
 per tenant. Without `TENANTS_FILE` the app is single-tenant, as before.
+
+**Email is per tenant.** Digests and alerts go only to that tenant's `email_to`; the global `EMAIL_TO`
+is ignored in multi-tenant mode. A tenant with no `email_to` gets no email: its digests are written to
+`data/outbox/<tenant>/` instead. In single-tenant mode `EMAIL_TO` may list several addresses, comma-separated.
 
 ## Product features that need set-up
 

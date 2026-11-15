@@ -73,14 +73,43 @@ def render_alert_html(session: Session, alert: Alert) -> str:
     return tmpl.render(alert=alert)
 
 
+def _recipients() -> list[str]:
+    """Who receives mail for the current tenant. In multi-tenant mode only the
+    tenant's own `email_to` is used — never the global EMAIL_TO, which would send
+    one client's figures to another's address. No recipients → outbox only."""
+    from cfo_agent.tenancy import current_tenant, is_multi_tenant, parse_recipients
+
+    if is_multi_tenant():
+        tenant = current_tenant()
+        return list(tenant.email_to) if tenant else []
+    return list(parse_recipients(get_settings().email_to))
+
+
+def _sender() -> str:
+    from cfo_agent.tenancy import current_tenant
+
+    tenant = current_tenant()
+    return (tenant.email_from if tenant and tenant.email_from else None) or get_settings().email_from
+
+
+def outbox_dir() -> Path:
+    """Per-tenant folder, so tenants' files can neither collide nor mix."""
+    from cfo_agent.tenancy import current_tenant_id, is_multi_tenant
+
+    if is_multi_tenant():
+        return OUTBOX_DIR / (current_tenant_id() or "_unrouted")
+    return OUTBOX_DIR
+
+
 def _write_outbox(name: str, html: str) -> Path:
-    OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
-    path = OUTBOX_DIR / name
+    folder = outbox_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / name
     path.write_text(html, encoding="utf-8")
     return path
 
 
-def _send_resend(html: str, subject: str) -> bool:
+def _send_resend(html: str, subject: str, to: list[str]) -> bool:
     settings = get_settings()
     if not settings.resend_api_key:
         return False
@@ -90,8 +119,8 @@ def _send_resend(html: str, subject: str) -> bool:
         "https://api.resend.com/emails",
         headers={"Authorization": f"Bearer {settings.resend_api_key}"},
         json={
-            "from": settings.email_from,
-            "to": [settings.email_to],
+            "from": _sender(),
+            "to": to,
             "subject": subject,
             "html": html,
         },
@@ -101,32 +130,37 @@ def _send_resend(html: str, subject: str) -> bool:
     return True
 
 
-def _send_smtp(html: str, subject: str) -> bool:
+def _send_smtp(html: str, subject: str, to: list[str]) -> bool:
     settings = get_settings()
     if not settings.smtp_host:
         return False
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = settings.email_from
-    msg["To"] = settings.email_to
+    sender = _sender()
+    msg["From"] = sender
+    msg["To"] = ", ".join(to)
     msg.attach(MIMEText(html, "html"))
     with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
         server.starttls()
         if settings.smtp_user:
             server.login(settings.smtp_user, settings.smtp_password or "")
-        server.sendmail(settings.email_from, [settings.email_to], msg.as_string())
+        server.sendmail(sender, to, msg.as_string())
     return True
 
 
 def deliver_html(html: str, subject: str, outbox_name: str) -> tuple[str, str | None]:
     """Returns (status, path). status: sent|outbox|failed."""
-    try:
-        if _send_resend(html, subject):
-            return "sent", None
-        if _send_smtp(html, subject):
-            return "sent", None
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Email send failed, falling back to outbox: %s", e)
+    to = _recipients()
+    if not to:
+        logger.warning("No email recipients configured for this tenant; writing to outbox only")
+    else:
+        try:
+            if _send_resend(html, subject, to):
+                return "sent", None
+            if _send_smtp(html, subject, to):
+                return "sent", None
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Email send failed, falling back to outbox: %s", e)
     path = _write_outbox(outbox_name, html)
     return "outbox", str(path)
 
