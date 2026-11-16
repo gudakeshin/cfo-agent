@@ -180,12 +180,16 @@ def step4_filter(
     # here so the synthesis explains the move from records instead of guessing.
     from cfo_agent.continuity import continuity_for, key_for_filter_item
     from cfo_agent.drivers import compute_drivers
+    from cfo_agent.periods import lens_for_digest
 
     for it in items:
         metric = it.weighted.mapped.signal.metric_id if it.weighted else (it.rule_fire.metric if it.rule_fire else None)
         drivers = compute_drivers(session, metric, week)
         if drivers:
             it.score_decomp = {**it.score_decomp, "drivers": drivers}
+        periods = lens_for_digest(session, metric, week)
+        if periods:
+            it.score_decomp = {**it.score_decomp, "periods": periods}
         it.score_decomp = {
             **it.score_decomp,
             "continuity": continuity_for(session, key_for_filter_item(it), week),

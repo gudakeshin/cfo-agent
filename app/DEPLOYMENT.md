@@ -276,7 +276,8 @@ is ignored in multi-tenant mode. A tenant with no `email_to` gets no email: its 
   an Indian April–March year; 1 for a calendar year). Cash flow is totalled and rates averaged over the period.
   A comparison needs the data to reach back far enough (a month after the first record, and a full period
   before the one being compared), otherwise it shows a dash; year-on-year needs a year of history.
-  Vs plan shows only for metrics that have plan rows.
+  Vs plan shows only for metrics that have plan rows. The same views feed each surfaced insight: the writer may
+  add one sentence on the longer-period picture, and every figure in it is checked like any other.
 - **Memory safety**: notes the model infers from conversations are sanitised, labelled untrusted in every
   prompt, and can never overwrite the CFO office's own notes (`cfo_notes` block, Memory page).
 

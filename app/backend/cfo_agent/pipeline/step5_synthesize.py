@@ -58,7 +58,7 @@ def step5_synthesize_item(
             "delta_wow": s.delta_wow,
             "kra_ids": item.kra_ids,
             "lineage": s.lineage_json,
-            "score_decomp": {k: v for k, v in item.score_decomp.items() if k != "drivers"},
+            "score_decomp": {k: v for k, v in item.score_decomp.items() if k not in ("drivers", "periods")},
         }
     if item.rule_fire:
         payload["red_line"] = {
@@ -72,6 +72,12 @@ def step5_synthesize_item(
     drivers = (item.score_decomp or {}).get("drivers")
     if drivers:
         payload["drivers"] = _with_display_amounts(drivers)
+
+    periods = (item.score_decomp or {}).get("periods")
+    if periods:
+        from cfo_agent.pipeline.fallback import period_display
+
+        payload["periods"] = period_display(item)
 
     if earlier:
         payload["already_reported_above"] = earlier
@@ -127,6 +133,9 @@ def step5_synthesize_item(
         "Do not say they explain the whole move unless drivers.reconciliation shows it, and if "
         "`not_in_feed_inr` is material say that part is unexplained by the records. "
         "If there are no drivers, do not speculate about causes. "
+        "If ITEM.periods is present it shows the longer-period picture (month, quarter, year to date or versus a "
+        "year ago): you may add ONE sentence to 'why' on it, quoting its *_display fields verbatim, and only for "
+        "periods listed there; never invent a period, and never describe a trend the periods do not show. "
         f"{continuity_note}"
         "Refer to the metric by ITEM.signal.metric_label, never by its metric_id, and never write JSON field "
         "names (such as not_in_feed or current_paise) — say it in plain words. "

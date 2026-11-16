@@ -193,3 +193,56 @@ def period_lens(
     # A period with nothing to compare against is shown as unavailable, not as a bare number.
     rows = {k: (r if r and r["change"] is not None else None) for k, r in rows.items()}
     return {"aggregation": agg, "periods": rows}
+
+
+# ── for the digest: a compact, model-ready view ─────────────────────────────
+
+_ORDER = ("mtd", "qtd", "ytd", "yoy")
+
+
+def lens_for_digest(session: Session, metric_id: str | None, week: str) -> dict | None:
+    """The period views the digest may quote for one metric: only comparisons that
+    exist, with a quarter that begins on the same day as the month folded into it.
+    None when the metric has no usable period view (or anything fails: the digest
+    must not break over a context nicety)."""
+    if not metric_id:
+        return None
+    try:
+        from cfo_agent.settings import get_settings
+        from cfo_agent.signals import COMPUTE_FNS, metric_meta
+
+        fn = COMPUTE_FNS.get(metric_id)
+        if fn is None:
+            return None
+        memo: dict[str, float | None] = {}
+
+        def value_fn(w: str) -> float | None:
+            if w not in memo:
+                r = fn(session, w)
+                memo[w] = r.value if r.available else None
+            return memo[w]
+
+        lens = period_lens(
+            metric_id,
+            week,
+            value_fn,
+            first_data_day=data_start(session),
+            direction=metric_meta(metric_id)["adverse_direction"],
+            fy_start_month=get_settings().fiscal_year_start_month,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+    views: list[dict] = []
+    for key in _ORDER:
+        v = lens["periods"].get(key)
+        if not v:
+            continue
+        v = {k: v[k] for k in ("label", "since", "value", "baseline", "change", "change_pct", "adverse", "basis")}
+        if views and v["since"] and v["since"] == views[-1]["since"] and v["change"] == views[-1]["change"]:
+            views[-1]["label"] = "Month and quarter to date"
+            continue
+        views.append(v)
+    if not views:
+        return None
+    return {"aggregation": lens["aggregation"], "views": views}

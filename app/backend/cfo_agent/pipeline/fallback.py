@@ -76,6 +76,67 @@ def _val(metric_id: str | None, v: float | None) -> str:
     return f"{n} {unit}"
 
 
+def _signed(metric_id: str | None, v: float) -> str:
+    sign = "+" if v >= 0 else "-"
+    return f"{sign}{_val(metric_id, abs(v))}"
+
+
+def _metric_of(item: FilterItem) -> str | None:
+    if item.weighted:
+        return item.weighted.mapped.signal.metric_id
+    return item.rule_fire.metric if item.rule_fire else None
+
+
+def period_display(item: FilterItem) -> list[dict]:
+    """The item's period views with every figure pre-formatted, as the model quotes them."""
+    metric = _metric_of(item)
+    periods = (item.score_decomp or {}).get("periods") or {}
+    flow = periods.get("aggregation") in ("sum", "avg")
+    out = []
+    for v in periods.get("views") or []:
+        row = {
+            "period": v["label"],
+            "since": v["since"],
+            "change_display": _signed(metric, v["change"]),
+            "basis": v["basis"],
+        }
+        if flow and v.get("value") is not None:
+            row["value_display"] = _val(metric, v["value"])
+        if v.get("change_pct") is not None:
+            row["change_pct_display"] = f"{v['change_pct']:+.1f}%"
+        out.append(row)
+    return out
+
+
+_SPAN = {
+    "Month to date": "the month",
+    "Quarter to date": "the quarter",
+    "Year to date": "the financial year",
+    "Month and quarter to date": "the month and quarter",
+}
+
+
+def _period_sentence(item: FilterItem) -> str:
+    """One factual sentence on the longest period that has a comparison."""
+    periods = (item.score_decomp or {}).get("periods") or {}
+    views = periods.get("views") or []
+    if not views:
+        return ""
+    metric = _metric_of(item)
+    pick = next((v for v in reversed(views) if v["label"] != "Vs a year ago"), views[-1])
+    change = pick["change"]
+    moved = "risen" if change > 0 else "fallen"
+    amount = _val(metric, abs(change))
+    if pick["label"] == "Vs a year ago":
+        return f" It has {moved} {amount} over the year."
+    span = _SPAN.get(pick["label"], pick["label"].lower())
+    if periods.get("aggregation") == "sum":
+        return f" Over {span} so far it totals {_val(metric, pick['value'])}."
+    if periods.get("aggregation") == "avg":
+        return f" Over {span} so far it averages {_val(metric, pick['value'])}."
+    return f" Since the start of {span} it has {moved} {amount}."
+
+
 def _fmt(v: float | None) -> str:
     if v is None:
         return "n/a"
@@ -111,7 +172,7 @@ def deterministic_synthesis(item: FilterItem) -> SynthesizeItemOutput:
     driver_text, driver_cites = _driver_sentence(item)
     return SynthesizeItemOutput(
         title=title,
-        what=SectionBlock(text=what + driver_text, citations=(primary or evidence) + driver_cites),
+        what=SectionBlock(text=what + driver_text + _period_sentence(item), citations=(primary or evidence) + driver_cites),
         why=SectionBlock(text=why, citations=primary or evidence),
         connects=SectionBlock(text=connects_text, citations=[]),
         action=SectionBlock(text=action, citations=evidence),

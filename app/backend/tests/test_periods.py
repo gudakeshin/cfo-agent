@@ -106,3 +106,68 @@ def test_year_ago_comparison_when_a_year_of_data_exists():
     assert p["yoy"]["change"] == 52.0
     assert p["yoy"]["basis"].startswith("vs the week ending 13 Jul 2025")
     assert iso_week_id(date(2025, 7, 13)) == "2025-W28"
+
+
+# ── the digest uses the period views ────────────────────────────────────────
+
+def test_digest_text_and_prompt_carry_the_period_figures(seeded_erp, db_session, monkeypatch):
+    from cfo_agent.models import DigestItem, PipelineRun
+    from cfo_agent.pipeline.orchestrator import reserve_week, run_pipeline
+    from cfo_agent.settings import get_settings
+    from cfo_agent.weighting import get_active_weighting
+
+    monkeypatch.setattr("cfo_agent.pipeline.orchestrator.archival_insert", lambda *a, **k: None)
+    monkeypatch.setattr("cfo_agent.pipeline.orchestrator.has_unconsolidated_activity", lambda s: False)
+    monkeypatch.setattr("cfo_agent.pipeline.orchestrator.send_digest_email", lambda s, d: d)
+    monkeypatch.setattr("cfo_agent.pipeline.step5_synthesize.archival_search", lambda *a, **k: [])
+    monkeypatch.setenv("MAX_LLM_COST_USD_PER_RUN", "0")  # deterministic text
+    get_settings.cache_clear()
+
+    week = seeded_erp["weeks"][-1]
+    wv = get_active_weighting(db_session)
+    run = reserve_week(db_session, week, wv.id)
+    run_pipeline(run.id, week, wv.id)
+    db_session.expire_all()
+    run = db_session.get(PipelineRun, run.id)
+    assert run.status == "completed", run.error
+
+    items = db_session.query(DigestItem).filter_by(digest_id=run.digest_id).all()
+    with_periods = [i for i in items if (i.score_decomp_json or {}).get("periods")]
+    assert with_periods, "a surfaced metric should carry its period views"
+    for it in with_periods:
+        views = it.score_decomp_json["periods"]["views"]
+        assert all(v["change"] is not None for v in views)
+        # The sentence uses only figures the periods hold, so none is flagged as invented.
+        assert not it.verification_json.get("unverified_figures"), it.verification_json
+    assert any("start of the" in i.what or "so far" in i.what or "over the year" in i.what for i in with_periods)
+
+
+def test_prompt_payload_formats_every_figure(seeded_erp, db_session):
+    from types import SimpleNamespace
+
+    from cfo_agent.pipeline.fallback import period_display
+
+    sig = SimpleNamespace(metric_id="cash_balance_cr")
+    item = SimpleNamespace(
+        weighted=SimpleNamespace(mapped=SimpleNamespace(signal=sig)),
+        rule_fire=None,
+        score_decomp={
+            "periods": {
+                "aggregation": "last",
+                "views": [
+                    {"label": "Month to date", "since": "2026-07-01", "value": 21.4, "baseline": 27.04,
+                     "change": -5.64, "change_pct": -20.9, "adverse": True, "basis": "vs the week ending 28 Jun 2026"}
+                ],
+            }
+        },
+    )
+    out = period_display(item)
+    assert out == [
+        {
+            "period": "Month to date",
+            "since": "2026-07-01",
+            "change_display": "-₹5.64 Cr",
+            "basis": "vs the week ending 28 Jun 2026",
+            "change_pct_display": "-20.9%",
+        }
+    ]
