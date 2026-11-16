@@ -72,6 +72,12 @@ const ICON_GUIDE = (
   </svg>
 )
 
+const ICON_ASK = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+    <path d="M4 5h16v11H9l-5 4V5Z" />
+    <path d="M9.5 9.2a2.5 2.5 0 1 1 3.6 2.2c-.6.3-1.1.8-1.1 1.4M12 14.8v.01" />
+  </svg>
+)
 const ICON_ACTIONS = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
     <rect x="4" y="4" width="16" height="16" rx="2" />
@@ -84,8 +90,9 @@ const ICON_BRIEFS = (
   </svg>
 )
 
-const NAV_PRIMARY = [
+const NAV_PRIMARY: { to: string; label: string; end?: boolean; icon: React.ReactNode; perm?: Permission }[] = [
   { to: '/', label: 'Briefing', end: true, icon: ICON_BRIEFING },
+  { to: '/ask', label: 'Ask', icon: ICON_ASK, perm: 'interact' },
   { to: '/digests', label: 'All digests', icon: ICONS.inbox },
   { to: '/actions', label: 'Actions', icon: ICON_ACTIONS },
   { to: '/briefs', label: 'Meeting briefs', icon: ICON_BRIEFS },
@@ -138,7 +145,7 @@ export default function App() {
         </div>
         <nav aria-label="Main">
           <div className="nav-section-label">For the CFO</div>
-          {NAV_PRIMARY.map(({ to, label, end, icon }) => (
+          {NAV_PRIMARY.filter((n) => !n.perm || can(n.perm)).map(({ to, label, end, icon }) => (
             <NavLink
               key={to}
               to={to}

@@ -432,6 +432,22 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class AskMessage(Base):
+    """The CFO's own conversation about a whole briefing (not one insight). Private to
+    the signed-in user: history is read and cleared per `user_email`."""
+
+    __tablename__ = "ask_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    digest_id: Mapped[int | None] = mapped_column(ForeignKey("digests.id"), nullable=True, index=True)
+    user_email: Mapped[str] = mapped_column(String(256), index=True)
+    role: Mapped[str] = mapped_column(String(16))  # user|assistant
+    content: Mapped[str] = mapped_column(Text)
+    citations_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    verification_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 # ─── Memory ───────────────────────────────────────────────────────────────────
 
 

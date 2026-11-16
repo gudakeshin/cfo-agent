@@ -53,6 +53,9 @@ POLICY: list[tuple[set[str], re.Pattern, str]] = [
     # CFO interactions
     ({"POST"}, re.compile(r"^/api/feedback$"), "interact"),
     ({"POST"}, re.compile(r"^/api/chat/\d+(/stream)?$"), "interact"),
+    # The Ask box and its history are personal: viewers cannot ask or read it
+    ({"POST"}, re.compile(r"^/api/ask(/stream|/clear)?$"), "interact"),
+    ({"GET"}, re.compile(r"^/api/ask$"), "interact"),
     ({"POST"}, re.compile(r"^/api/alerts/\d+/ack$"), "interact"),
     ({"POST"}, re.compile(r"^/api/digests/\d+/share$"), "interact"),
     ({"POST"}, re.compile(r"^/api/shares/\d+/revoke$"), "interact"),

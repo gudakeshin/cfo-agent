@@ -9,6 +9,7 @@ import { AuditLog } from './pages/AuditLog'
 import { Connections } from './pages/Connections'
 import { DataHealth } from './pages/DataHealth'
 import { DigestDetail } from './pages/DigestDetail'
+import { Ask } from './pages/Ask'
 import { Briefing } from './pages/Briefing'
 import { DigestArchive } from './pages/DigestArchive'
 import { DigestRuns } from './pages/DigestRuns'
@@ -54,6 +55,7 @@ createRoot(document.getElementById('root')!).render(
             <Route index element={<Briefing />} />
             <Route path="digests" element={<DigestArchive />} />
             <Route path="runs" element={<RequirePermission permission="configure"><DigestRuns /></RequirePermission>} />
+            <Route path="ask" element={<RequirePermission permission="interact"><Ask /></RequirePermission>} />
             <Route path="guide" element={<Guide />} />
             <Route path="audit" element={<RequirePermission permission="administer"><AuditLog /></RequirePermission>} />
             <Route path="digests/:id" element={<DigestDetail />} />

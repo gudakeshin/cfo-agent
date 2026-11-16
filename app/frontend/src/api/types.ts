@@ -584,3 +584,11 @@ export interface Continuity {
   since_week?: string
   weeks_running?: number
 }
+
+/** The signed-in user's conversation about one briefing. */
+export interface AskThread {
+  digest_id: number | null
+  week: string | null
+  headline: string | null
+  messages: ChatMessage[]
+}

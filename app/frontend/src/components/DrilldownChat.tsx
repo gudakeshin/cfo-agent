@@ -4,6 +4,7 @@ import { api } from '../api/client'
 import type { ChatMessage } from '../api/types'
 import { useEscape } from '../hooks/useEscape'
 import { useMetrics } from '../hooks/useMetrics'
+import { ChatVerificationNote } from './ChatVerificationNote'
 import { CitationPopover } from './CitationPopover'
 import { RichText } from './RichText'
 
@@ -18,19 +19,6 @@ const SUGGESTIONS = [
   'What if we make a ₹5 Cr payment this week?',
   'How has this moved over the last 8 weeks?',
 ]
-
-function VerificationNote({ m }: { m: ChatMessage }) {
-  const v = m.verification
-  if (!v) return null
-  const notes: string[] = []
-  if (v.unverified_figures?.length)
-    notes.push(`Check before relying on: ${v.unverified_figures.join(', ')} (not matched to a source).`)
-  if (v.rejected_citations?.length)
-    notes.push(`${v.rejected_citations.length} unsupported source reference(s) removed.`)
-  if (v.uncited && !notes.length) notes.push('No sources cited in this answer.')
-  if (!notes.length) return null
-  return <p className="verification-note chat-verification">{notes.join(' ')}</p>
-}
 
 export function DrilldownChat({ itemId, itemTitle, onClose }: Props) {
   const [message, setMessage] = useState('')
@@ -146,7 +134,7 @@ export function DrilldownChat({ itemId, itemTitle, onClose }: Props) {
             {m.role === 'assistant' ? (
               <>
                 <RichText text={m.content} onCite={setActiveCitation} labels={labels} />
-                <VerificationNote m={m} />
+                <ChatVerificationNote m={m} />
               </>
             ) : (
               <div>{m.content}</div>

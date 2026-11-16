@@ -7,6 +7,7 @@ import type {
   MetricHistory,
   MetricMeta,
   WeightingPreview,
+  AskThread,
   ChatMessage,
   ChatStreamEvent,
   CitationDetail,
@@ -68,18 +69,18 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
-/** POST a question and read the server-sent event stream until it ends. */
-async function streamChat(
-  itemId: number,
-  message: string,
+/** POST to a streaming endpoint and read the server-sent event stream until it ends. */
+async function streamSse(
+  path: string,
+  body: Record<string, unknown>,
   onEvent: (e: ChatStreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const res = await fetch(`${BASE}/chat/${itemId}/stream`, {
+  const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify(body),
     signal,
   })
   if (!res.ok || !res.body) {
@@ -116,6 +117,12 @@ async function streamChat(
     }
   }
 }
+
+const streamChat = (itemId: number, message: string, onEvent: (e: ChatStreamEvent) => void, signal?: AbortSignal) =>
+  streamSse(`/chat/${itemId}/stream`, { message }, onEvent, signal)
+
+const streamAsk = (digestId: number | null, message: string, onEvent: (e: ChatStreamEvent) => void, signal?: AbortSignal) =>
+  streamSse('/ask/stream', { message, digest_id: digestId }, onEvent, signal)
 
 export const api = {
   health: () => request<{ ok: boolean }>('/health'),
@@ -186,6 +193,12 @@ export const api = {
   // Chat
   getChat: (itemId: number) => request<ChatMessage[]>(`/chat/${itemId}`),
   streamChat,
+
+  // Ask (questions about a whole briefing; private to the signed-in user)
+  getAsk: (digestId?: number | null) => request<AskThread>(digestId ? `/ask?digest_id=${digestId}` : '/ask'),
+  streamAsk,
+  clearAsk: (digestId: number | null) =>
+    request<{ cleared: number }>('/ask/clear', { method: 'POST', body: JSON.stringify({ digest_id: digestId }) }),
   postChat: (itemId: number, message: string) =>
     request<ChatMessage>(`/chat/${itemId}`, {
       method: 'POST',

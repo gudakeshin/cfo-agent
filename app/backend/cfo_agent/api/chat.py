@@ -45,30 +45,18 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
-@router.post("/chat/{item_id}/stream")
-def stream_chat(item_id: int, body: ChatBody):
-    """Server-sent events: tool / reset / delta / done / error."""
-    check = get_session()
-    try:
-        if not check.get(DigestItem, item_id):
-            raise HTTPException(404, f"Unknown digest item {item_id}")
-    finally:
-        check.close()
-
+def stream_response(run, what: str) -> StreamingResponse:
+    """Run `run(emit)` on a worker thread and relay its events as server-sent events.
+    An exception becomes an `error` event; the stream always ends."""
     q: queue.Queue[tuple[str, dict] | None] = queue.Queue()
 
     def worker() -> None:
-        session = get_session()
         try:
-            run_chat(session, item_id, body.message, emit=lambda e, d: q.put((e, d)))
-            session.commit()
-            note_activity()
+            run(lambda e, d: q.put((e, d)))
         except Exception:  # noqa: BLE001
-            session.rollback()
-            logger.exception("Streaming chat failed for item %s", item_id)
+            logger.exception("Streaming %s failed", what)
             q.put(("error", {"detail": "The assistant could not answer just now. Please try again."}))
         finally:
-            session.close()
             q.put(None)
 
     threading.Thread(target=worker, daemon=True).start()
@@ -85,6 +73,31 @@ def stream_chat(item_id: int, body: ChatBody):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/chat/{item_id}/stream")
+def stream_chat(item_id: int, body: ChatBody):
+    """Server-sent events: tool / reset / delta / done / error."""
+    check = get_session()
+    try:
+        if not check.get(DigestItem, item_id):
+            raise HTTPException(404, f"Unknown digest item {item_id}")
+    finally:
+        check.close()
+
+    def run(emit) -> None:
+        session = get_session()
+        try:
+            run_chat(session, item_id, body.message, emit=emit)
+            session.commit()
+            note_activity()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    return stream_response(run, f"chat for item {item_id}")
 
 
 @router.get("/chat/{item_id}")

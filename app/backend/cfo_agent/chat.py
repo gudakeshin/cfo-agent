@@ -111,6 +111,66 @@ def gate_answer(
     return cleaned, list(dict.fromkeys(used)), verification
 
 
+def converse(
+    session: Session,
+    system: str,
+    messages: list[dict[str, Any]],
+    ctx: ChatDataContext,
+    as_of_week: str,
+    emit: Emit,
+) -> tuple[str, "llm.LlmBudget"]:
+    """The streamed tool-use loop shared by the per-insight chat and the Ask box:
+    model turns interleaved with read-only data / memory tools, up to the round
+    limit. Returns the final text (not yet gated) and the budget used."""
+    tools = DATA_TOOLS + CHAT_TOOLS
+    settings = get_settings()
+    budget = llm.LlmBudget(max_calls=settings.max_tool_rounds + 1)
+
+    final_text = ""
+    for _round in range(settings.max_tool_rounds + 1):
+        if budget.remaining() <= 0:
+            break
+        round_text: list[str] = []
+
+        def on_text(t: str) -> None:
+            round_text.append(t)
+            emit("delta", {"text": t})
+
+        blocks, stop_reason = llm.stream_round(
+            system=system,
+            messages=messages,
+            tools=tools,
+            purpose="drilldown_chat",
+            budget=budget,
+            on_text=on_text,
+        )
+        messages.append({"role": "assistant", "content": blocks})
+        tool_uses = [b for b in blocks if b["type"] == "tool_use"]
+        text = "".join(b["text"] for b in blocks if b["type"] == "text")
+        if not tool_uses or stop_reason != "tool_use":
+            final_text = text
+            break
+        if round_text:
+            emit("reset", {})  # preamble before a tool call — not part of the answer
+        results = []
+        for tu in tool_uses:
+            emit("tool", {"name": tu["name"], "label": TOOL_LABELS.get(tu["name"], tu["name"])})
+            if tu["name"] in {t["name"] for t in DATA_TOOLS}:
+                out = ctx.dispatch(tu["name"], tu["input"])
+            else:
+                out = dispatch_tool(session, tu["name"], tu["input"], allow_writes=False, as_of_week=as_of_week)
+                ctx.tools_used.append(tu["name"])
+            results.append({"type": "tool_result", "tool_use_id": tu["id"], "content": out})
+        messages.append({"role": "user", "content": results})
+
+    if not final_text:
+        final_text = (
+            "I couldn't complete that within the step limit. Try a narrower question "
+            "(one metric, one customer or one scenario)."
+        )
+    return final_text, budget
+
+
 def run_chat(
     session: Session,
     item_id: int,
@@ -160,52 +220,7 @@ def run_chat(
         for m in get_chat_history(session, item_id)
         if m.role in ("user", "assistant")
     ]
-    tools = DATA_TOOLS + CHAT_TOOLS
-    settings = get_settings()
-    budget = llm.LlmBudget(max_calls=settings.max_tool_rounds + 1)
-
-    final_text = ""
-    for _round in range(settings.max_tool_rounds + 1):
-        if budget.remaining() <= 0:
-            break
-        round_text: list[str] = []
-
-        def on_text(t: str) -> None:
-            round_text.append(t)
-            emit("delta", {"text": t})
-
-        blocks, stop_reason = llm.stream_round(
-            system=system,
-            messages=messages,
-            tools=tools,
-            purpose="drilldown_chat",
-            budget=budget,
-            on_text=on_text,
-        )
-        messages.append({"role": "assistant", "content": blocks})
-        tool_uses = [b for b in blocks if b["type"] == "tool_use"]
-        text = "".join(b["text"] for b in blocks if b["type"] == "text")
-        if not tool_uses or stop_reason != "tool_use":
-            final_text = text
-            break
-        if round_text:
-            emit("reset", {})  # preamble before a tool call — not part of the answer
-        results = []
-        for tu in tool_uses:
-            emit("tool", {"name": tu["name"], "label": TOOL_LABELS.get(tu["name"], tu["name"])})
-            if tu["name"] in {t["name"] for t in DATA_TOOLS}:
-                out = ctx.dispatch(tu["name"], tu["input"])
-            else:
-                out = dispatch_tool(session, tu["name"], tu["input"], allow_writes=False, as_of_week=as_of_week)
-                ctx.tools_used.append(tu["name"])
-            results.append({"type": "tool_result", "tool_use_id": tu["id"], "content": out})
-        messages.append({"role": "user", "content": results})
-
-    if not final_text:
-        final_text = (
-            "I couldn't complete that within the step limit. Try a narrower question "
-            "(one metric, one customer or one scenario)."
-        )
+    final_text, budget = converse(session, system, messages, ctx, as_of_week, emit)
 
     tool_values: list[float] = []
     for r in ctx.results:

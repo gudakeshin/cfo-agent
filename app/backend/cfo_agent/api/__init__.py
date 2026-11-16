@@ -6,6 +6,7 @@ from cfo_agent.auth import authorize
 
 from cfo_agent.api import (
     alerts,
+    ask,
     audit,
     auth,
     chat,
@@ -37,6 +38,7 @@ api_router.include_router(digests.router, tags=["digests"])
 api_router.include_router(alerts.router, tags=["alerts"])
 api_router.include_router(feedback.router, tags=["feedback"])
 api_router.include_router(chat.router, tags=["chat"])
+api_router.include_router(ask.router, tags=["ask"])
 api_router.include_router(citations.router, tags=["citations"])
 api_router.include_router(memory.router, tags=["memory"])
 api_router.include_router(runs.router, tags=["runs"])

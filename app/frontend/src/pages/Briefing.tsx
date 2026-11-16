@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api } from '../api/client'
+import { useAuth } from '../hooks/useAuth'
 import type { BriefingChange, BriefingKpi } from '../api/types'
 import { DataHealthBanner } from '../components/DataHealthBanner'
 import { DigestItems } from '../components/DigestItems'
@@ -111,6 +112,7 @@ function ChangeList({ title, items, hint }: { title: string; items: BriefingChan
 }
 
 export function Briefing() {
+  const { can } = useAuth()
   const { data: briefing, isLoading, error } = useQuery({ queryKey: ['briefing'], queryFn: api.getBriefing })
   const digestId = briefing?.digest_id ?? null
   const { data: digest } = useQuery({
@@ -163,6 +165,11 @@ export function Briefing() {
           <h1>{digest?.headline ?? '…'}</h1>
         </div>
         <div className="header-actions no-print">
+          {can('interact') && (
+            <Link className="button" to={`/ask?digest=${digestId}`}>
+              Ask about this
+            </Link>
+          )}
           <Link className="button" to={`/digests/${digestId}`}>
             Open as digest
           </Link>
