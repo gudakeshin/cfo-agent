@@ -4,6 +4,7 @@ import { api } from '../api/client'
 import type { DigestDetail } from '../api/types'
 import { metricIdFromSignal } from '../utils/format'
 import { DrilldownChat } from './DrilldownChat'
+import { GlanceList } from './GlanceList'
 import { InsightCard } from './InsightCard'
 
 /** The insight list for one digest: cards with trend lines, feedback and drill-down. */
@@ -38,6 +39,7 @@ export function DigestItems({ digest }: { digest: DigestDetail }) {
 
   return (
     <>
+      <GlanceList items={digest.items} />
       <div className="insight-list">
         {digest.items.map((item) => {
           const m = metricByItem.get(item.id)

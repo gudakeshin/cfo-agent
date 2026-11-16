@@ -60,10 +60,10 @@ export function InsightCard({ item, feedback, onFeedbackChange, onDrilldown, his
           <p>{item.why}</p>
         </div>
         {item.connects && (
-          <div>
-            <div className="field-label connects">Connects</div>
+          <details className="connects-detail">
+            <summary>Connects to other areas</summary>
             <p>{item.connects}</p>
-          </div>
+          </details>
         )}
         {item.action && (
           <div className="action-box">

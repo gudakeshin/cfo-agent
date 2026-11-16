@@ -90,7 +90,6 @@ const NAV_PRIMARY = [
   { to: '/actions', label: 'Actions', icon: ICON_ACTIONS },
   { to: '/briefs', label: 'Meeting briefs', icon: ICON_BRIEFS },
   { to: '/news', label: 'Regulatory feed', icon: ICONS.news },
-  { to: '/feedback', label: 'Pilot scorecard', icon: ICONS.feedback },
   { to: '/guide', label: 'Guide', icon: ICON_GUIDE },
 ]
 
@@ -103,6 +102,7 @@ const ICON_AUDIT = (
 
 const NAV_SECONDARY: { to: string; label: string; icon: React.ReactNode; perm: Permission }[] = [
   { to: '/runs', label: 'Digest runs', icon: ICON_RUNS, perm: 'configure' },
+  { to: '/feedback', label: 'Pilot scorecard', icon: ICONS.feedback, perm: 'configure' },
   { to: '/weighting', label: 'Weighting', icon: ICONS.weighting, perm: 'configure' },
   { to: '/kras', label: 'KRA framework', icon: ICONS.kra, perm: 'configure' },
   { to: '/metrics', label: 'Metrics', icon: ICON_BRIEFING, perm: 'configure' },

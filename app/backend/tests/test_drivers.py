@@ -142,3 +142,53 @@ def test_deterministic_fallback_names_the_largest_contributor(seeded_erp, db_ses
     assert items and all("Largest contributor:" in i.what or "is not in the feed" in i.what for i in items)
     assert all(not i.verification_json.get("unverified_figures") for i in items), [i.verification_json for i in items]
     get_settings.cache_clear()
+
+
+def test_prompt_carries_label_and_earlier_findings_and_stays_in_evidence(seeded_erp, db_session, monkeypatch):
+    """Later items are told what higher-ranked items already reported, every item is
+    told to use the display label, and the fallback text uses labels with units."""
+    from cfo_agent.pipeline.orchestrator import reserve_week, run_pipeline
+
+    prompts: list[str] = []
+
+    def fake_parse(schema, *, system, user, purpose, budget=None, **_):
+        if budget is not None:
+            budget.check()
+            budget.calls += 1
+        if schema is ConnectOutput:
+            return ConnectOutput(connections=[])
+        if schema is HeadlineOutput:
+            return HeadlineOutput(headline="h")
+        prompts.append(user)
+        allowed = json.loads(re.search(r"ALLOWED_CITATIONS: (\[.*?\])\n", user).group(1))
+        n = len(prompts)
+        return SynthesizeItemOutput(
+            title=f"Finding {n}", what=SectionBlock(text="x", citations=allowed[:1]),
+            why=SectionBlock(text="y", citations=allowed[:1]), connects=SectionBlock(text="", citations=[]),
+            action=SectionBlock(text="z", citations=allowed[:1]),
+        )
+
+    monkeypatch.setattr("cfo_agent.pipeline.step5_synthesize.archival_search", lambda *a, **k: [])
+    monkeypatch.setattr("cfo_agent.pipeline.orchestrator.archival_insert", lambda *a, **k: None)
+    monkeypatch.setattr("cfo_agent.pipeline.orchestrator.has_unconsolidated_activity", lambda s: False)
+    monkeypatch.setattr("cfo_agent.pipeline.orchestrator.send_digest_email", lambda s, d: d)
+    monkeypatch.setattr("cfo_agent.pipeline.step3_connect.parse", fake_parse)
+    monkeypatch.setattr("cfo_agent.pipeline.step5_synthesize.parse", fake_parse)
+
+    week = seeded_erp["weeks"][-1]
+    wv = get_active_weighting(db_session)
+    run = reserve_week(db_session, week, wv.id)
+    run_pipeline(run.id, week, wv.id)
+    assert len(prompts) >= 2
+    first = json.loads(prompts[0].split("ITEM:\n", 1)[1])
+    second = json.loads(prompts[1].split("ITEM:\n", 1)[1])
+    assert "already_reported_above" not in first
+    assert second["already_reported_above"] == ["Finding 1 — x"]  # title and the start of 'what'
+    for p in prompts:
+        item = json.loads(p.split("ITEM:\n", 1)[1])
+        if item.get("signal"):
+            assert item["signal"]["metric_label"] and "_" not in item["signal"]["metric_label"]
+
+    from cfo_agent.pipeline.fallback import _val
+    assert _val("cash_balance_cr", 21.4) == "₹21.4 Cr" and _val("ar_overdue_pct", 35.7) == "35.7%"
+    assert _val("dso_days", 73.06) == "73.06 days" and _val("gst_open_notices", 2.0) == "2"

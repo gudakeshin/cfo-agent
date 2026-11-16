@@ -180,10 +180,15 @@ def run_pipeline(
 
         t0 = tick("synthesize")
         pairs = []
+        earlier_by_item: dict[int, list[str]] = {}
         for item in filtered:
+            # Title plus the opening of 'what': enough for the next item to see which
+            # findings (not just which topics) have already been stated.
+            earlier = [f"{sp.title} — {sp.what.text[:400]}" for _, sp in pairs]
+            earlier_by_item[id(item)] = earlier
             try:
                 syn = step5_synthesize_item(
-                    session, item, framework, weighting, week, budget
+                    session, item, framework, weighting, week, budget, earlier=earlier
                 )
             except BudgetExhausted as e:
                 logger.warning("Synthesis fell back to deterministic text: %s", e)
@@ -195,7 +200,8 @@ def run_pipeline(
             # One repair retry with the failed citations fed back — counts against budget
             try:
                 return step5_synthesize_item(
-                    session, item, framework, weighting, week, budget, repair_errors=errors
+                    session, item, framework, weighting, week, budget, repair_errors=errors,
+                    earlier=earlier_by_item.get(id(item)),
                 )
             except BudgetExhausted:
                 degraded.append("repair")

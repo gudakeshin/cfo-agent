@@ -38,6 +38,7 @@ def step5_synthesize_item(
     week: str,
     budget: LlmBudget,
     repair_errors: dict[str, str] | None = None,
+    earlier: list[str] | None = None,
 ) -> SynthesizeItemOutput:
     from cfo_agent.pipeline.fallback import allowed_citations_for
 
@@ -46,9 +47,13 @@ def step5_synthesize_item(
 
     if item.weighted:
         s = item.weighted.mapped.signal
+        from cfo_agent.signals import metric_meta
+
         payload["signal"] = {
             "signal_id": s.signal_id,
             "metric_id": s.metric_id,
+            # The name the CFO sees in the app: use it, never the raw metric_id
+            "metric_label": metric_meta(s.metric_id)["label"],
             "value": s.value,
             "delta_wow": s.delta_wow,
             "kra_ids": item.kra_ids,
@@ -67,6 +72,9 @@ def step5_synthesize_item(
     drivers = (item.score_decomp or {}).get("drivers")
     if drivers:
         payload["drivers"] = _with_display_amounts(drivers)
+
+    if earlier:
+        payload["already_reported_above"] = earlier
 
     if item.connections:
         payload["connections"] = [c.model_dump() for c in item.connections]
@@ -105,6 +113,15 @@ def step5_synthesize_item(
         "Do not say they explain the whole move unless drivers.reconciliation shows it, and if "
         "`not_in_feed_inr` is material say that part is unexplained by the records. "
         "If there are no drivers, do not speculate about causes. "
+        "Refer to the metric by ITEM.signal.metric_label, never by its metric_id, and never write JSON field "
+        "names (such as not_in_feed or current_paise) — say it in plain words. "
+        "Be brief: 'what' at most three sentences, 'why' at most two, 'connects' at most one, 'action' at most "
+        "two; lead with the number and what moved it. "
+        "Stay inside the evidence: do not describe prior-week levels, trends or causes that are not in ITEM, and "
+        "recommend only actions that follow from the cited rows, the red line or the connections. "
+        "ITEM.already_reported_above lists findings stated in higher-ranked items of this same digest: do not "
+        "re-explain them — at most one short clause pointing back (e.g. 'see the cash item above') — and spend "
+        "this item on what is specific to this metric. "
         "If past_insights exist, reference continuity briefly.\n\n"
         f"ALLOWED_CITATIONS: {json.dumps(allowed_cites)}\n\n"
         f"ITEM:\n{json.dumps(payload, indent=2, default=str)}"

@@ -53,7 +53,27 @@ def _driver_sentence(item: FilterItem) -> tuple[str, list[str]]:
 
 
 def _label(metric_id: str | None) -> str:
-    return (metric_id or "metric").replace("_", " ")
+    """The metric's display name, as the CFO sees it in the app."""
+    if not metric_id:
+        return "metric"
+    from cfo_agent.signals import metric_meta
+
+    return metric_meta(metric_id)["label"]
+
+
+def _val(metric_id: str | None, v: float | None) -> str:
+    """A value with its unit: ₹21.4 Cr, 73.1 days, 35.7%."""
+    from cfo_agent.signals import metric_meta
+
+    unit = metric_meta(metric_id)["unit"] if metric_id else ""
+    n = _fmt(v)
+    if v is None or unit in ("", "count", "score"):
+        return n
+    if unit == "₹ Cr":
+        return f"{'-' if v < 0 else ''}₹{_fmt(abs(v))} Cr"
+    if unit == "%":
+        return f"{n}%"
+    return f"{n} {unit}"
 
 
 def _fmt(v: float | None) -> str:
@@ -72,8 +92,8 @@ def deterministic_synthesis(item: FilterItem) -> SynthesizeItemOutput:
         title = f"Red line: {rf.description}"
         if rf.metric:
             what = (
-                f"{_label(rf.metric)} is {_fmt(rf.value)} against a red-line threshold of "
-                f"{_fmt(rf.threshold)} for {rf.week}."
+                f"{_label(rf.metric)} is {_val(rf.metric, rf.value)} against a red-line threshold of "
+                f"{_val(rf.metric, rf.threshold)} for {rf.week}."
             )
         else:
             what = f"{int(rf.value or 0)} open event(s) match the red line '{rf.description}' as of {rf.as_of_date}."
@@ -81,9 +101,9 @@ def deterministic_synthesis(item: FilterItem) -> SynthesizeItemOutput:
         action = "Review the cited evidence and confirm the mitigation owner this week."
     else:
         s = item.weighted.mapped.signal  # type: ignore[union-attr]
-        title = f"{_label(s.metric_id).capitalize()} moved to {_fmt(s.value)}"
+        title = f"{_label(s.metric_id)} moved to {_val(s.metric_id, s.value)}"
         delta = f" ({'+' if (s.delta_wow or 0) >= 0 else ''}{_fmt(s.delta_wow)} week on week)" if s.delta_wow is not None else ""
-        what = f"{_label(s.metric_id).capitalize()} is {_fmt(s.value)} for {s.week}{delta}."
+        what = f"{_label(s.metric_id)} is {_val(s.metric_id, s.value)} for {s.week}{delta}."
         why = f"It maps to {', '.join(item.kra_ids) or 'a ranked KRA'} and cleared the surfacing bar under the current weighting."
         action = "Ask the KRA owner to explain the movement using the cited records."
 
