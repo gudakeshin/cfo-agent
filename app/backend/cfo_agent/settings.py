@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     news_cron: str = Field(default="30 7 * * *", alias="NEWS_CRON")
     news_model: str = Field(default="claude-sonnet-5", alias="NEWS_MODEL")
     timezone: str = Field(default="Asia/Kolkata", alias="TIMEZONE")
+    # India's financial year runs April to March; set 1 for a calendar-year client.
+    fiscal_year_start_month: int = Field(default=4, ge=1, le=12, alias="FISCAL_YEAR_START_MONTH")
 
     frontend_dist: Path = Field(
         default=BACKEND_ROOT.parent / "frontend" / "dist",

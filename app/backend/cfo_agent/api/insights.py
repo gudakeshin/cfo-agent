@@ -127,6 +127,53 @@ def signal_history(
         session.close()
 
 
+@router.get("/periods")
+def period_views(
+    metrics: str | None = Query(None, description="Comma-separated metric ids; default is the KPI set"),
+    week: str | None = None,
+):
+    """Month-, quarter-, year-to-date and year-ago views of each metric, as of `week`
+    (default: the latest digest's week, else the latest week with data)."""
+    from cfo_agent.analytics import plan_context
+    from cfo_agent.periods import data_start, period_lens
+    from cfo_agent.settings import get_settings
+
+    session = get_session()
+    try:
+        if not week:
+            latest = _latest_digest(session)
+            weeks = _data_weeks(session, 1)
+            week = latest.week if latest else (weeks[-1] if weeks else None)
+        if not week:
+            return {"week": None, "metrics": {}}
+        stamp = _data_stamp(session)
+        first_day = data_start(session)
+        fy = get_settings().fiscal_year_start_month
+        ids = [m for m in (metrics.split(",") if metrics else KPI_METRICS) if m in COMPUTE_FNS][:12]
+        out: dict[str, Any] = {}
+        for m in ids:
+            meta = metric_meta(m)
+            lens = period_lens(
+                m,
+                week,
+                lambda w, m=m: metric_value(session, m, w, stamp),
+                first_data_day=first_day,
+                direction=meta["adverse_direction"],
+                fy_start_month=fy,
+            )
+            current = metric_value(session, m, week, stamp)
+            plan = plan_context(session, m, week, current, meta["adverse_direction"]) if current is not None else None
+            out[m] = {
+                **meta,
+                "value": current,
+                **lens,
+                "vs_plan": None if not plan else {k: plan[k] for k in ("plan", "gap", "gap_pct", "adverse")},
+            }
+        return {"week": week, "fiscal_year_start_month": fy, "metrics": out}
+    finally:
+        session.close()
+
+
 # ── briefing ────────────────────────────────────────────────────────────────
 
 def item_key(item: DigestItem) -> str:

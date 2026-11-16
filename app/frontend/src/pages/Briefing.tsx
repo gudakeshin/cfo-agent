@@ -10,6 +10,7 @@ import { Sparkline } from '../components/Sparkline'
 import { EntityTable } from '../components/EntityTable'
 import { ExportShare } from '../components/ExportShare'
 import { KraHeatmap } from '../components/KraHeatmap'
+import { PeriodLens } from '../components/PeriodLens'
 import { extra } from '../api/extra'
 import { formatDelta, formatMetric, readPref, writePref } from '../utils/format'
 import { formatWeekLabel } from '../utils/weeks'
@@ -184,6 +185,8 @@ export function Briefing() {
           ))}
         </section>
       )}
+
+      <PeriodLens week={briefing?.week} />
 
       {changes && (
         <section className="panel changes-panel" aria-label="What changed">

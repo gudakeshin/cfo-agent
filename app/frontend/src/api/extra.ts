@@ -75,6 +75,34 @@ export interface EventTypeOption {
   in_data: boolean
 }
 
+// ── period lens ──────────────────────────────────────────────────────────────
+export interface PeriodView {
+  label: string
+  value: number | null
+  baseline: number | null
+  change: number | null
+  change_pct: number | null
+  adverse: boolean | null
+  basis: string
+  since: string | null
+}
+
+export interface PeriodMetric {
+  id: string
+  label: string
+  unit: string
+  value: number | null
+  aggregation: 'last' | 'sum' | 'avg'
+  periods: Record<'mtd' | 'qtd' | 'ytd' | 'yoy', PeriodView | null>
+  vs_plan: { plan: number; gap: number; gap_pct: number; adverse: boolean } | null
+}
+
+export interface PeriodLens {
+  week: string | null
+  fiscal_year_start_month?: number
+  metrics: Record<string, PeriodMetric>
+}
+
 // ── pilot scorecard ──────────────────────────────────────────────────────────
 export interface ScorecardWeek {
   week: string
@@ -230,6 +258,7 @@ export const extra = {
   getShared: (token: string) => request<SharedDigest>(`/shared/${encodeURIComponent(token)}`),
 
   heatmap: (n = 13) => request<Heatmap>(`/insights/heatmap?n=${n}`),
+  periods: (week?: string) => request<PeriodLens>(`/periods${week ? `?week=${encodeURIComponent(week)}` : ''}`),
   scorecard: () => request<Scorecard>('/feedback/scorecard'),
   eventTypes: () => request<EventTypeOption[]>('/redlines/event-types'),
   backtest: (body: { type: string; metric?: string; operator?: string; threshold?: number; event_type?: string }) =>

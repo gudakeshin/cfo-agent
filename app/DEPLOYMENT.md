@@ -271,6 +271,12 @@ is ignored in multi-tenant mode. A tenant with no `email_to` gets no email: its 
 - **Metrics with no data are blank, never estimated.** Segments and cost centres are read from the client's
   own revenue and expense rows. Close cycle needs `gl_entries`; unreconciled items and board-pack readiness
   stay blank until a reconciliation feed exists. `free_cash_flow_cr` is net operating cash flow (no capex).
+- **Period lens** (Briefing, `GET /api/periods`): change since the start of the month, fiscal quarter and fiscal
+  year, and against a year ago, built from the weekly readings. Set `FISCAL_YEAR_START_MONTH` (default 4 for
+  an Indian April–March year; 1 for a calendar year). Cash flow is totalled and rates averaged over the period.
+  A comparison needs the data to reach back far enough (a month after the first record, and a full period
+  before the one being compared), otherwise it shows a dash; year-on-year needs a year of history.
+  Vs plan shows only for metrics that have plan rows.
 - **Memory safety**: notes the model infers from conversations are sanitised, labelled untrusted in every
   prompt, and can never overwrite the CFO office's own notes (`cfo_notes` block, Memory page).
 
