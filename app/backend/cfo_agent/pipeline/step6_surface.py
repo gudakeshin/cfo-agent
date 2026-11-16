@@ -12,6 +12,7 @@ from cfo_agent.citations import (
     unverified_figures,
     _numeric_values,
 )
+from cfo_agent.continuity import continuity_conflicts
 from cfo_agent.pipeline.fallback import allowed_citations_for, deterministic_synthesis
 from cfo_agent.pipeline.schemas import SynthesizeItemOutput
 from cfo_agent.pipeline.step4_filter import FilterItem
@@ -108,8 +109,10 @@ def step6_surface(
     for item, syn in pairs:
         allowed = allowed_citations_for(item)
         cites, ok, bad, missing, errors = _gate(session, syn, allowed)
+        repaired = False  # one repair retry per item, whichever problem needs it first
         if (bad or missing) and repair_fn is not None:
             syn = repair_fn(item, syn, errors)
+            repaired = True
             cites, ok, bad, missing, errors = _gate(session, syn, allowed)
 
         notes: list[str] = []
@@ -133,6 +136,23 @@ def step6_surface(
                 )
                 continue
 
+        # Wording must agree with the record of earlier briefings (new vs carried over).
+        continuity = (item.score_decomp or {}).get("continuity")
+        ignore = [item.rule_fire.description] if item.rule_fire else []
+
+        def _conflicts(sy):
+            return continuity_conflicts(
+                [sy.title, sy.what.text, sy.why.text, sy.connects.text, sy.action.text], continuity, ignore
+            )
+
+        conflicts = _conflicts(syn)
+        if conflicts and repair_fn is not None and not repaired and not fallback:
+            candidate = repair_fn(item, syn, {"<continuity>": " ".join(conflicts)})
+            c_cites, c_ok, c_bad, c_missing, _ = _gate(session, candidate, allowed)
+            if not (c_bad or c_missing) and c_ok:
+                syn, cites, ok = candidate, c_cites, c_ok
+                conflicts = _conflicts(syn)
+
         snapshot = _snapshot(session, ok)
         texts = [syn.title, syn.what.text, syn.why.text, syn.connects.text, syn.action.text]
         flagged = unverified_figures(texts, _known_values(item, snapshot))
@@ -146,6 +166,7 @@ def step6_surface(
                 verification={
                     "unverified_figures": flagged,
                     "fallback": fallback,
+                    "continuity_conflicts": conflicts,
                     "notes": notes,
                 },
             )

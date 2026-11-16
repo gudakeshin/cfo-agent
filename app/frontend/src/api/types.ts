@@ -48,10 +48,11 @@ export interface DigestItem {
   citations: Record<string, string[]> | CitationRef[] | string[]
   is_red_line: boolean
   priority_score: number
-  score_decomp: (Record<string, unknown> & { context?: SignalContext; drivers?: Drivers | null }) | null
+  score_decomp: (Record<string, unknown> & { context?: SignalContext; drivers?: Drivers | null; continuity?: Continuity }) | null
   relationship_ids: string[]
   verification?: {
     unverified_figures?: string[]
+    continuity_conflicts?: string[]
     fallback?: boolean
     notes?: string[]
   }
@@ -573,4 +574,13 @@ export interface Drivers {
   basis: string
   rows: DriverRow[]
   reconciliation?: Record<string, number> | null
+}
+
+/** Whether a finding was in earlier briefings (computed from the stored digests). */
+export interface Continuity {
+  status: 'new' | 'continuing'
+  first_briefing?: boolean
+  last_week?: string
+  since_week?: string
+  weeks_running?: number
 }

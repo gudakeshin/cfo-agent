@@ -178,6 +178,7 @@ def step4_filter(
     items = items[:max_items]
     # What moved each surfaced metric (by customer, vendor, cost centre…), computed
     # here so the synthesis explains the move from records instead of guessing.
+    from cfo_agent.continuity import continuity_for, key_for_filter_item
     from cfo_agent.drivers import compute_drivers
 
     for it in items:
@@ -185,5 +186,9 @@ def step4_filter(
         drivers = compute_drivers(session, metric, week)
         if drivers:
             it.score_decomp = {**it.score_decomp, "drivers": drivers}
+        it.score_decomp = {
+            **it.score_decomp,
+            "continuity": continuity_for(session, key_for_filter_item(it), week),
+        }
     empty_bar = len(items) == 0
     return items, empty_bar

@@ -9,6 +9,8 @@ import { PriorityTag } from './PriorityTag'
 import { Sparkline } from './Sparkline'
 import { ContextChips } from './ContextChips'
 import { DriverTable } from './DriverTable'
+
+const shortWeek = (w?: string) => (w ?? '').replace(/^\d{4}-/, '')
 import { TrackAction } from './TrackAction'
 
 function citationId(c: string | { id?: string; citation_id?: string }): string {
@@ -38,6 +40,8 @@ export function InsightCard({ item, feedback, onFeedbackChange, onDrilldown, his
   const [activeCitation, setActiveCitation] = useState<string | null>(null)
   const citations = flattenCitations(item.citations)
   const unverified = item.verification?.unverified_figures ?? []
+  const continuity = item.score_decomp?.continuity
+  const conflicts = item.verification?.continuity_conflicts ?? []
 
   return (
     <article className={`insight-card${item.is_red_line ? ' red-line' : ''}`}>
@@ -45,6 +49,20 @@ export function InsightCard({ item, feedback, onFeedbackChange, onDrilldown, his
         <span className="rank">#{item.rank}</span>
         <h3>{item.title}</h3>
         <PriorityTag score={item.priority_score} isRedLine={item.is_red_line} />
+        {continuity && !continuity.first_briefing && (
+          <span
+            className={`badge ${continuity.status === 'continuing' ? 'badge-muted' : 'badge-amber'}`}
+            title={
+              continuity.status === 'continuing'
+                ? `Also in the ${shortWeek(continuity.last_week)} briefing`
+                : 'Not in any earlier briefing'
+            }
+          >
+            {continuity.status === 'continuing'
+              ? `Continuing since ${shortWeek(continuity.since_week)}`
+              : 'New this week'}
+          </span>
+        )}
       </header>
 
       {history && <TrendStrip history={history} />}
@@ -92,6 +110,10 @@ export function InsightCard({ item, feedback, onFeedbackChange, onDrilldown, his
             )
           })}
         </div>
+      )}
+
+      {conflicts.length > 0 && (
+        <p className="verification-note">Check the wording: {conflicts.join(' ')}</p>
       )}
 
       {(unverified.length > 0 || item.verification?.fallback) && (

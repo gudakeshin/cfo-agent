@@ -251,7 +251,11 @@ is ignored in multi-tenant mode. A tenant with no `email_to` gets no email: its 
   8-week average, segments, unpaid invoices that fell due, open GST items. The AI is given these rows and must
   cite them. For cash, the card states how much of the bank-balance change the receipts, payments and expenses
   feed does not explain. Custom metrics have no breakdown. Digests made before this change do not show it.
-- **Pilot scorecard** (CFO menu): weeks the briefing was opened, insights surfaced, share given a verdict,
+- **New vs continuing**: each insight is marked "New this week" or "Continuing since W27", worked out from the
+  stored digests (same identity as the Briefing's "what changed": the metric, else the red-line rule). The AI is
+  told which it is, the finished text is checked against it, and a contradiction (for example "a fresh matter" about
+  a notice already in last week's briefing) gets one rewrite; any that remains shows as "Check the wording" on the card.
+- **Pilot scorecard** (set-up menu): weeks the briefing was opened, insights surfaced, share given a verdict,
   and the success test — at least one insight acted on that the CFO had not already spotted. "Opened" counts
   views by users in the CFO role (any user when sign-in is off).
 - **Metrics with no data are blank, never estimated.** Segments and cost centres are read from the client's

@@ -76,6 +76,14 @@ def step5_synthesize_item(
     if earlier:
         payload["already_reported_above"] = earlier
 
+    continuity = (item.score_decomp or {}).get("continuity")
+    continuity_note = ""
+    if continuity:
+        from cfo_agent.continuity import continuity_prompt
+
+        payload["continuity"] = continuity
+        continuity_note = continuity_prompt(continuity) + " "
+
     if item.connections:
         payload["connections"] = [c.model_dump() for c in item.connections]
 
@@ -95,7 +103,13 @@ def step5_synthesize_item(
         {"type": "text", "text": render_blocks_for_prompt(session, skip_managed=True)},
     ]
     repair_note = ""
-    if repair_errors:
+    if repair_errors and any(k.startswith("<continuity") for k in repair_errors):
+        repair_note = (
+            "\n\nREPAIR: your previous wording contradicted the record of earlier briefings. "
+            + " ".join(repair_errors.values())
+            + " Rewrite the item keeping the same citations and figures, fixing only that wording."
+        )
+    elif repair_errors:
         repair_note = (
             "\n\nREPAIR: your previous attempt cited IDs that do not resolve. "
             "Cite ONLY from ALLOWED_CITATIONS this time. Failed citations:\n"
@@ -113,6 +127,7 @@ def step5_synthesize_item(
         "Do not say they explain the whole move unless drivers.reconciliation shows it, and if "
         "`not_in_feed_inr` is material say that part is unexplained by the records. "
         "If there are no drivers, do not speculate about causes. "
+        f"{continuity_note}"
         "Refer to the metric by ITEM.signal.metric_label, never by its metric_id, and never write JSON field "
         "names (such as not_in_feed or current_paise) — say it in plain words. "
         "Be brief: 'what' at most three sentences, 'why' at most two, 'connects' at most one, 'action' at most "
