@@ -38,6 +38,8 @@ export function FeedbackButtons({
 
   const submit = (v: FeedbackVerdict, knew = alreadyKnew, n = note) => {
     setVerdict(v)
+    // One tap records the verdict. Only "Set aside" asks what was wrong, and even then it is optional.
+    if (v === 'set_aside') setShowNote(true)
     mutation.mutate({ verdict: v, already_knew: knew, note: n })
   }
 
@@ -50,7 +52,7 @@ export function FeedbackButtons({
   }
 
   const saveNote = () => {
-    if (verdict) {
+    if (verdict && note !== initialNote) {
       mutation.mutate({ verdict, already_knew: alreadyKnew, note })
     }
   }
@@ -70,16 +72,18 @@ export function FeedbackButtons({
           {label}
         </button>
       ))}
-      <label className="toggle-row">
-        <input
-          type="checkbox"
-          checked={alreadyKnew}
-          onChange={toggleKnew}
-          disabled={mutation.isPending}
-        />
-        Already knew
-      </label>
-      {verdict && !showNote && (
+      {verdict && (
+        <label className="toggle-row">
+          <input
+            type="checkbox"
+            checked={alreadyKnew}
+            onChange={toggleKnew}
+            disabled={mutation.isPending}
+          />
+          Already knew
+        </label>
+      )}
+      {verdict && verdict !== 'set_aside' && !showNote && (
         <button type="button" className="link-button" onClick={() => setShowNote(true)}>
           Add a note
         </button>
@@ -88,14 +92,16 @@ export function FeedbackButtons({
         <div className="feedback-note">
           <textarea
             aria-label="Feedback note"
-            placeholder="Optional note (e.g. too much detail on GST mechanics)"
+            placeholder={
+              verdict === 'set_aside'
+                ? 'What was off? Optional (e.g. too much detail, wrong number, not relevant)'
+                : 'Optional note'
+            }
+            onBlur={saveNote}
             value={note}
             onChange={(e) => setNote(e.target.value)}
             rows={2}
           />
-          <button type="button" onClick={saveNote} disabled={mutation.isPending}>
-            Save note
-          </button>
         </div>
       )}
       {mutation.isSuccess && !mutation.isPending && (
