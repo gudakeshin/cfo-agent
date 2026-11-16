@@ -251,6 +251,11 @@ is ignored in multi-tenant mode. A tenant with no `email_to` gets no email: its 
   8-week average, segments, unpaid invoices that fell due, open GST items. The AI is given these rows and must
   cite them. For cash, the card states how much of the bank-balance change the receipts, payments and expenses
   feed does not explain. Custom metrics have no breakdown. Digests made before this change do not show it.
+- **Email is built for a phone**: a single fluid column with big tap targets, a light and a dark version, a plain-text
+  alternative for clients that need it, and, per item, the headline sentences, the biggest movers and the action
+  (the full reasoning and evidence stay in the app). Every email links into the app: "Open the briefing", each item's
+  evidence, and Ask. Links use `PUBLIC_BASE_URL` (in multi-tenant mode, each tenant's own host), so set it to the public
+  address or the links point nowhere useful. The red-line alert shows the figures against the limit, not raw data.
 - **Ask** (CFO menu, CFO role and above): the CFO questions the whole briefing, not one insight. The agent answers
   from what the briefing already says (every insight, its evidence and its "what moved it" rows), reads the ERP
   data and trends, and can run simple what-if scenarios; every figure links to its source and anything the citation

@@ -1,59 +1,114 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <title>CFO Digest {{ digest.week }}</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+<title>CFO briefing · {{ week_label }}</title>
+<style>
+  body { margin: 0; padding: 0; -webkit-text-size-adjust: 100%; }
+  a { color: #1d6f42; }
+  @media (max-width: 480px) {
+    .pad { padding-left: 16px !important; padding-right: 16px !important; }
+    .btn a { display: block !important; }
+  }
+  @media (prefers-color-scheme: dark) {
+    .bg { background: #101312 !important; }
+    .card { background: #1a1d1c !important; color: #ececec !important; }
+    .muted { color: #a3aaa7 !important; }
+    .rule { border-color: #2e3331 !important; }
+    .action { background: #17261d !important; }
+    .warn { background: #3a2d12 !important; color: #f3dfb0 !important; }
+    a { color: #8fd19e !important; }
+  }
+</style>
 </head>
-<body style="margin:0;padding:0;background:#f4f6f8;font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f6f8;padding:24px 0;">
-    <tr><td align="center">
-      <table role="presentation" width="640" cellspacing="0" cellpadding="0" style="background:#ffffff;border:1px solid #dde1e6;">
-        <tr><td style="padding:28px 32px;background:#0b3d2e;color:#ffffff;">
+<body class="bg" style="margin:0;padding:0;background:#f4f6f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1a1a1a;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">{{ preheader }}</div>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="bg" style="background:#f4f6f8;">
+    <tr><td align="center" style="padding:12px 8px;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="card" style="max-width:600px;background:#ffffff;border-radius:8px;overflow:hidden;">
+
+        <tr><td class="pad" style="padding:22px 24px;background:#0b3d2e;color:#ffffff;">
           <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.85;">CFO Agentic Intelligence</div>
-          <div style="font-size:22px;margin-top:8px;font-weight:bold;">Weekly Digest · {{ digest.week }}</div>
-          <div style="font-size:15px;margin-top:12px;line-height:1.4;">{{ digest.headline }}</div>
+          <div style="font-size:14px;margin-top:6px;opacity:0.9;">{{ week_label }}</div>
+          <div style="font-size:20px;line-height:1.3;margin-top:10px;font-weight:600;">{{ digest.headline }}</div>
         </td></tr>
 
-        {% if data_health and (data_health.stale or data_health.warnings) %}
-        <tr><td style="padding:16px 32px;background:#fff4e5;border-bottom:1px solid #f0d9a8;font-size:14px;">
-          <strong>Data health warning</strong>
-          {% for w in data_health.warnings %}<div>{{ w }}</div>{% endfor %}
+        {% if open_url %}
+        <tr><td class="pad btn" style="padding:18px 24px 6px;">
+          <a href="{{ open_url }}" style="display:inline-block;background:#1d6f42;color:#ffffff !important;text-decoration:none;font-weight:600;font-size:16px;padding:14px 22px;border-radius:8px;text-align:center;">Open the briefing</a>
         </td></tr>
         {% endif %}
 
-        {% if digest.empty_bar %}
-        <tr><td style="padding:28px 32px;font-size:15px;">
+        {% if data_health and (data_health.stale or data_health.warnings) %}
+        <tr><td class="pad" style="padding:12px 24px 0;">
+          <div class="warn" style="background:#fff4e5;padding:12px 14px;border-radius:6px;font-size:14px;line-height:1.45;">
+            <strong>Data health</strong>
+            {% for w in data_health.warnings %}<div>{{ w }}</div>{% endfor %}
+          </div>
+        </td></tr>
+        {% endif %}
+
+        {% if digest.empty_bar or not items %}
+        <tr><td class="pad" style="padding:24px;font-size:16px;line-height:1.5;">
           Nothing met the surfacing bar this week under the current risk appetite.
         </td></tr>
         {% endif %}
 
-        {% for item in items %}
-        <tr><td style="padding:24px 32px;border-top:1px solid #e8ecf0;">
-          <div style="font-size:12px;color:#5c6b73;">
-            #{{ item.rank }}
-            {% if item.is_red_line %}<span style="color:#b00020;font-weight:bold;"> · RED LINE</span>{% endif %}
-            {% if item.kra_ids %} · {{ item.kra_ids | join(', ') }}{% endif %}
-          </div>
-          <div style="font-size:18px;font-weight:bold;margin:6px 0 12px;">{{ item.title }}</div>
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="font-size:14px;line-height:1.5;">
-            <tr><td style="padding:4px 0;"><strong>What</strong> — {{ item.what }}</td></tr>
-            <tr><td style="padding:4px 0;"><strong>Why</strong> — {{ item.why }}</td></tr>
-            <tr><td style="padding:4px 0;"><strong>Connects</strong> — {{ item.connects }}</td></tr>
-            <tr><td style="padding:4px 0;"><strong>Action</strong> — {{ item.action }}</td></tr>
+        {% if items|length > 2 %}
+        <tr><td class="pad" style="padding:16px 24px 4px;">
+          <div class="muted" style="font-size:12px;letter-spacing:0.06em;text-transform:uppercase;color:#5c6b73;">At a glance</div>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:6px;">
+            {% for item in items %}
+            <tr>
+              <td valign="top" class="muted" style="padding:5px 10px 5px 0;font-size:14px;color:#5c6b73;width:18px;">{{ item.rank }}</td>
+              <td style="padding:5px 0;font-size:15px;line-height:1.35;">
+                {% if item.is_red_line %}<span style="color:#b00020;font-weight:700;">Red line · </span>{% endif %}{{ item.title }}
+              </td>
+            </tr>
+            {% endfor %}
           </table>
-          {% if item.footnotes %}
-          <div style="margin-top:12px;padding-top:10px;border-top:1px dotted #ccd3d9;font-size:12px;color:#4a5560;">
-            <strong>Sources</strong>
-            <ol style="margin:6px 0 0 18px;padding:0;">
-              {% for fn in item.footnotes %}<li style="margin-bottom:4px;">{{ fn }}</li>{% endfor %}
-            </ol>
+        </td></tr>
+        {% endif %}
+
+        {% for item in items %}
+        <tr><td class="pad" style="padding:0 24px;">
+          <div class="rule" style="border-top:1px solid #e8ecf0;margin-top:16px;"></div>
+        </td></tr>
+        <tr><td class="pad" style="padding:16px 24px 4px;">
+          <div class="muted" style="font-size:12px;color:#5c6b73;">
+            #{{ item.rank }} ·
+            {% if item.is_red_line %}<span style="color:#b00020;font-weight:700;">RED LINE</span>{% else %}{{ item.priority }}{% endif %}
+            {% if item.status %} · {{ item.status }}{% endif %}
+          </div>
+          <div style="font-size:18px;line-height:1.3;font-weight:700;margin:6px 0 10px;">{{ item.title }}</div>
+          <div style="font-size:15px;line-height:1.55;">{{ item.what }}</div>
+          {% if item.movers %}
+          <div class="muted" style="font-size:13px;line-height:1.45;color:#5c6b73;margin-top:8px;">Moved by: {{ item.movers | join(' · ') }}</div>
+          {% endif %}
+          {% if item.action %}
+          <div class="action" style="background:#f1f7f3;border-radius:6px;padding:10px 12px;margin-top:12px;font-size:14px;line-height:1.5;">
+            <strong>Do this</strong> — {{ item.action }}
+          </div>
+          {% endif %}
+          {% if item.url %}
+          <div style="margin-top:6px;">
+            <a href="{{ item.url }}" style="display:inline-block;padding:12px 0;font-size:14px;font-weight:600;">Why it matters and the evidence →</a>
           </div>
           {% endif %}
         </td></tr>
         {% endfor %}
 
-        <tr><td style="padding:20px 32px;background:#f7f9fa;font-size:12px;color:#5c6b73;">
-          Weighting: {{ digest.weighting_label }} · Framework version recorded on digest
+        {% if ask_url %}
+        <tr><td class="pad" style="padding:8px 24px 4px;">
+          <a href="{{ ask_url }}" style="display:inline-block;padding:12px 0;font-size:15px;font-weight:600;">Ask a question about this briefing →</a>
+        </td></tr>
+        {% endif %}
+
+        <tr><td class="pad muted" style="padding:18px 24px 22px;font-size:12px;line-height:1.5;color:#5c6b73;">
+          Lens: {{ digest.weighting_label }}. The agent advises; it never acts. Every figure is sourced — open the briefing to see the evidence.
         </td></tr>
       </table>
     </td></tr>
