@@ -29,6 +29,15 @@ def generate_digest(body: GenerateDigestBody, background_tasks: BackgroundTasks)
         except WeekBusy as e:
             raise HTTPException(409, detail=f"A digest run for {body.week} is already in progress") from e
         rid = run.id
+        from cfo_agent.settings import get_settings
+
+        if get_settings().job_mode == "queue":
+            # Durable: survives a restart or deploy, retried if the worker dies mid-run.
+            from cfo_agent.jobqueue import enqueue
+
+            job_id, _ = enqueue("digest", {"week": body.week, "weighting_version_id": wv_id, "run_id": rid},
+                                max_attempts=2, created_by="api")
+            return {"run_id": rid, "week": body.week, "status": "pending", "job_id": job_id}
         background_tasks.add_task(run_pipeline, rid, body.week, wv_id)
         return {"run_id": rid, "week": body.week, "status": "pending"}
     finally:

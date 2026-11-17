@@ -88,12 +88,21 @@ def main() -> None:
     sched.add_job(sync_connector_jobs, "interval", minutes=2, id="connector_jobs_sync")
     sched.add_job(leased("stale_runs", job_recover_stale_runs), "interval", minutes=10, id="stale_runs")
     sync_connector_jobs()
+    executor = None
+    from cfo_agent.settings import global_settings
+
+    if global_settings().job_mode == "queue":
+        from cfo_agent.jobrunner import Executor
+
+        executor = Executor().start()
     logger.info("Worker started; waiting for jobs")
 
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
     stop.wait()
+    if executor is not None:
+        executor.stop(timeout=60)  # let running jobs finish; a lost one is retried by another worker
     sched.shutdown(wait=True)
     logger.info("Worker stopped")
 

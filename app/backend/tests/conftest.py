@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 # Must set before importing cfo_agent.settings
+# The suite runs work inline; queue behaviour is tested explicitly in tests/test_jobqueue.py.
+os.environ.setdefault("JOB_MODE", "inline")
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-test-key-deterministic-suite-only")
 os.environ.setdefault(
     "DATABASE_URL",

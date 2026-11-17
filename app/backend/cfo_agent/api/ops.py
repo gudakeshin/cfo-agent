@@ -77,3 +77,48 @@ def ready():
         return {"ready": True}
     finally:
         session.close()
+
+
+@router.get("/ops/jobs")
+def ops_jobs(limit: int = 50):
+    """The background-job queue: counts, recent jobs, and whether any worker is alive."""
+    from cfo_agent import jobqueue
+    from cfo_agent.models import Job, JobWorker
+
+    session = get_session()
+    try:
+        now = datetime.utcnow()
+        jobs = session.query(Job).order_by(Job.id.desc()).limit(min(max(limit, 1), 200)).all()
+        workers = [w for w in session.query(JobWorker).all() if (now - w.heartbeat_at).total_seconds() < 120]
+        counts = jobqueue.counts()
+        oldest = session.query(func.min(Job.run_after)).filter(Job.status == "queued").scalar()
+        waiting_s = max(0, int((now - oldest).total_seconds())) if oldest else 0
+        return {
+            "counts": counts,
+            "workers": [{"id": w.id, "threads": w.threads, "seen_s_ago": int((now - w.heartbeat_at).total_seconds())} for w in workers],
+            # Jobs are queued but nothing is there to run them: the one failure that is silent otherwise.
+            "stalled": bool(counts.get("queued")) and not workers and waiting_s > 120,
+            "oldest_waiting_s": waiting_s,
+            "jobs": [
+                {
+                    "id": j.id, "kind": j.kind, "status": j.status, "attempts": j.attempts, "max_attempts": j.max_attempts,
+                    "payload": j.payload_json, "last_error": j.last_error, "result": j.result_json,
+                    "created_at": j.created_at, "started_at": j.started_at, "finished_at": j.finished_at,
+                    "run_after": j.run_after,
+                }
+                for j in jobs
+            ],
+        }
+    finally:
+        session.close()
+
+
+@router.post("/ops/jobs/{job_id}/retry")
+def retry_job(job_id: int):
+    from fastapi import HTTPException
+
+    from cfo_agent import jobqueue
+
+    if not jobqueue.retry_dead(job_id):
+        raise HTTPException(409, "Only a dead job with no active twin can be retried")
+    return {"job_id": job_id, "status": "queued"}

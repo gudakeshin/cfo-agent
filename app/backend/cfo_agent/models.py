@@ -667,6 +667,54 @@ class SchedulerLease(Base):
     job_runs_json: Mapped[dict] = mapped_column(JSON, default=dict)  # job id -> last run ISO time
 
 
+class Job(Base):
+    """A unit of background work waiting for, or being run by, a worker (see jobqueue.py).
+    Lives in the tenant's own database, so a client's queue, history and limits are theirs."""
+
+    __tablename__ = "jobs"
+    __table_args__ = (
+        # One active job per dedupe key: a slow sweep never piles up behind itself.
+        Index(
+            "uq_job_active_dedupe",
+            "dedupe_key",
+            unique=True,
+            sqlite_where=text("status IN ('queued', 'running') AND dedupe_key IS NOT NULL"),
+            postgresql_where=text("status IN ('queued', 'running') AND dedupe_key IS NOT NULL"),
+        ),
+        Index("ix_jobs_claim", "status", "run_after"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(48), index=True)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    # queued | running | succeeded | dead (failed on every attempt, or not retryable)
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    run_after: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    dedupe_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    locked_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    result_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class JobWorker(Base):
+    """A running job executor, for the ops view ("is anything there to run my jobs?")."""
+
+    __tablename__ = "job_workers"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    threads: Mapped[int] = mapped_column(Integer, default=1)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    heartbeat_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 # ─── Sharing, custom metrics, learning, actions, briefs ───────────────────────
 
 

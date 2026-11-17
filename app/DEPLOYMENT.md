@@ -10,7 +10,7 @@ and AI calls that never see customer or vendor names.
 |---|---|---|
 | `db` | PostgreSQL 16 + pgvector (all data, memory vectors) | 1 (use the client's managed Postgres if available) |
 | `api` | Web UI + REST API (`uvicorn`, 2 workers), `RUN_SCHEDULER=false` | 1+ replicas |
-| `worker` | Weekly digest, red-line sweep (every 15 min), connector syncs, news, memory consolidation | 1 (a 2nd is a hot standby) |
+| `worker` | Runs the queued background jobs (weekly digest, red-line sweep every 15 min, connector syncs, news, memory consolidation) and, holding the scheduler lease, queues the scheduled ones | 1 or more: add replicas for throughput |
 
 Workers compete for a database lease; only the holder runs jobs, and a standby takes
 over within ~3 minutes. Only one digest per week can run at a time (database-enforced),
@@ -277,6 +277,31 @@ python -m cfo_agent.registry list          # also: show, unset, disable, enable,
   With `CONTROL_DATABASE_URL` set the app is multi-tenant even with no clients yet: unknown hosts get 404,
   never the default database. There is no web screen for this yet; it is an operator tool, not a tenant
   admin one.
+
+## Background jobs (queue and workers)
+
+Cron triggers and manual digest runs no longer run work themselves: they put a **job** in the tenant's own
+database (`jobs` table) and any worker picks it up. (`JOB_MODE=inline` restores the old run-in-the-caller
+behaviour.)
+
+- **Survives deploys.** A job whose worker dies (crash, deploy, `SIGKILL`) stops heartbeating and is taken
+  over by another worker within `JOB_STALE_AFTER_S` (default 180 s). A half-finished digest run is closed out
+  and started afresh; a finished one is never repeated.
+- **Retries.** A failed job is retried with a growing wait (30 s, 60 s, … up to 15 min), usually 2 or 3
+  attempts, then shown as `dead`. Retry a dead job with `POST /api/ops/jobs/{id}/retry`.
+- **No pile-up.** A job with a dedupe key (the sweeps, scheduled digest, connector syncs) is not queued again
+  while one is active.
+- **Scale and fairness.** Run as many workers as you need (`python -m cfo_agent.worker`, `JOB_WORKER_THREADS`
+  threads each, default 4); only one holds the scheduler lease and queues the cron jobs, all of them run
+  jobs. Workers take one job per tenant per round, so a tenant with a big backlog cannot starve the others,
+  and a tenant never has more than `JOB_MAX_PER_TENANT` (default 2) running at once, across all workers.
+- **Watching it.** `GET /api/ops/jobs` shows counts, recent jobs with their errors, live workers, and a
+  `stalled` flag that turns on when jobs are waiting and no worker has been seen for two minutes. API-only
+  replicas (`RUN_SCHEDULER=false`) only enqueue: at least one worker must run, or jobs wait. A
+  single-process setup (`RUN_SCHEDULER=true` on the API) runs its own jobs, as before.
+- **Still run in the calling process:** manual connector syncs, manual news refresh, and chat. A job that
+  exceeds an hour stops being heartbeated and is retried by another worker, but its thread cannot be
+  killed and is abandoned until the process restarts.
 
 ## Product features that need set-up
 

@@ -175,7 +175,19 @@ async def lifespan(app: FastAPI):
                 session.close()
 
         for_each_tenant(_register_one)
-    yield
+        if settings.job_mode == "queue":
+            # One-process deployments (the demo): run the jobs this process schedules.
+            # With dedicated workers, set RUN_SCHEDULER=false here and run `python -m cfo_agent.worker`.
+            from cfo_agent.jobrunner import Executor
+
+            app.state.executor = Executor().start()
+    try:
+        yield
+    finally:
+        executor = getattr(app.state, "executor", None)
+        if executor is not None:
+            executor.stop(timeout=10)
+            app.state.executor = None
 
 
 app = FastAPI(title="CFO Agentic Intelligence", version="0.1.0", lifespan=lifespan)

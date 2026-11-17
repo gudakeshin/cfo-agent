@@ -206,6 +206,10 @@ def tenant_job_id(job_id: str) -> str:
     return f"{tid}:{job_id}" if tid else job_id
 
 
+def _queue_mode() -> bool:
+    return get_settings().job_mode == "queue"
+
+
 def upsert_job(job_id: str, fn, cron: str) -> None:
     """Register or replace a cron job for the current tenant. No-op when the
     scheduler is not started."""
@@ -217,6 +221,11 @@ def upsert_job(job_id: str, fn, cron: str) -> None:
     settings = get_settings()
     tz = ZoneInfo(settings.timezone)
     tid = current_tenant_id()
+    if _queue_mode() and job_id.startswith("connector:"):
+        # A connector's cron only enqueues; a worker runs the sync.
+        from cfo_agent.job_handlers import enqueue_connector_sync
+
+        fn = lambda cid=job_id.split(":", 1)[1]: enqueue_connector_sync(cid)  # noqa: E731
     job_id = tenant_job_id(job_id)
     sched.add_job(
         leased(job_id, fn, tenant=tid or None, per_tenant=False),
@@ -298,20 +307,29 @@ def start_scheduler() -> BackgroundScheduler:
     job_lease_heartbeat()  # take the lease now if it is free
     sched = BackgroundScheduler(timezone=tz)
     sched.add_job(job_lease_heartbeat, "interval", seconds=60, id="lease")
-    sched.add_job(leased("digest", job_digest), CronTrigger(**_parse_cron(settings.digest_cron), timezone=tz), id="digest")
+    queued = _queue_mode()
+    from cfo_agent import job_handlers as jh
+
     sched.add_job(
-        leased("redline", job_redline_sweep),
+        leased("digest", jh.enqueue_digest if queued else job_digest),
+        CronTrigger(**_parse_cron(settings.digest_cron), timezone=tz), id="digest",
+    )
+    sched.add_job(
+        leased("redline", jh.enqueue_redline_sweep if queued else job_redline_sweep),
         CronTrigger(**_parse_cron(settings.redline_cron), timezone=tz),
         id="redline",
     )
-    sched.add_job(leased("consolidation", job_consolidation_debounce), "interval", minutes=2, id="consolidation")
+    sched.add_job(
+        leased("consolidation", jh.enqueue_consolidation if queued else job_consolidation_debounce),
+        "interval", minutes=2, id="consolidation",
+    )
     # News refresh — only when scheduler is started (never in tests)
     news_cron = getattr(settings, "news_cron", "30 7 * * *")
     try:
         from cfo_agent.news import job_news_refresh
 
         sched.add_job(
-            leased("news", job_news_refresh),
+            leased("news", jh.enqueue_news if queued else job_news_refresh),
             CronTrigger(**_parse_cron(news_cron), timezone=tz),
             id="news",
         )

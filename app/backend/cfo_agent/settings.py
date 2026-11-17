@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     news_cron: str = Field(default="30 7 * * *", alias="NEWS_CRON")
     news_model: str = Field(default="claude-sonnet-5", alias="NEWS_MODEL")
     timezone: str = Field(default="Asia/Kolkata", alias="TIMEZONE")
+    # Background jobs. queue = cron and manual runs become durable jobs that workers execute
+    # (retries, per-tenant limits, survive restarts); inline = run in the calling process (tests).
+    job_mode: str = Field(default="queue", alias="JOB_MODE")
+    job_worker_threads: int = Field(default=4, ge=1, alias="JOB_WORKER_THREADS")
+    job_max_per_tenant: int = Field(default=2, ge=1, alias="JOB_MAX_PER_TENANT")
+    job_poll_s: float = Field(default=2.0, alias="JOB_POLL_S")
+    job_stale_after_s: float = Field(default=180.0, alias="JOB_STALE_AFTER_S")
     # Tenant registry: a control database listing the clients (see cfo_agent/registry.py).
     # Unset = single tenant, or the TENANTS_FILE below. Set = multi-tenant, even when empty.
     control_database_url: str | None = Field(default=None, alias="CONTROL_DATABASE_URL")
