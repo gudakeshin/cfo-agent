@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -8,6 +10,9 @@ from cfo_agent.memory.archival import archival_search, check_archival_consistenc
 from cfo_agent.memory.blocks import (
     AGENT_EDITABLE,
     HUMAN_ONLY,
+    MANAGED,
+    MemoryError as BlockError,
+    provenance,
     get_block,
     list_blocks,
     revision_history,
@@ -18,6 +23,7 @@ from cfo_agent.memory.recall import recall_search
 from cfo_agent.models import ConsolidationRun
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class SearchBody(BaseModel):
@@ -43,8 +49,9 @@ def memory_blocks():
                 "char_limit": b.char_limit,
                 "updated_at": b.updated_at,
                 # Human-only blocks are managed by KRA/Weighting editors — not editable here
-                "editable": b.name not in HUMAN_ONLY,
+                "editable": b.name not in MANAGED,
                 "agent_editable": b.name in AGENT_EDITABLE,
+                "provenance": provenance(b.name),
                 "managed_by": (
                     "kra" if b.name == "kra_framework"
                     else "weighting" if b.name == "priority_weighting"
@@ -73,7 +80,7 @@ def block_history(name: str):
             }
             for r in revs
         ]
-    except Exception as e:
+    except BlockError as e:
         raise HTTPException(404, str(e)) from e
     finally:
         session.close()
@@ -81,7 +88,7 @@ def block_history(name: str):
 
 @router.put("/memory/blocks/{name}")
 def update_block(name: str, body: BlockUpdate):
-    if name in HUMAN_ONLY:
+    if name in MANAGED:
         raise HTTPException(
             409,
             detail=(
@@ -102,7 +109,7 @@ def update_block(name: str, body: BlockUpdate):
         )
         session.commit()
         return {"name": row.name, "content": row.content, "updated_at": row.updated_at}
-    except Exception as e:
+    except BlockError as e:
         session.rollback()
         raise HTTPException(422, str(e)) from e
     finally:
@@ -137,7 +144,8 @@ def consolidate():
         }
     except Exception as e:
         session.rollback()
-        raise HTTPException(500, str(e)) from e
+        logger.exception("Memory operation failed")
+        raise HTTPException(500, "Memory operation failed; see server logs") from e
     finally:
         session.close()
 
@@ -151,7 +159,8 @@ def memory_maintenance():
         return {"ok": True, "stats": stats}
     except Exception as e:
         session.rollback()
-        raise HTTPException(500, str(e)) from e
+        logger.exception("Memory operation failed")
+        raise HTTPException(500, "Memory operation failed; see server logs") from e
     finally:
         session.close()
 

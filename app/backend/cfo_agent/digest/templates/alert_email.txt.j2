@@ -1,0 +1,22 @@
+RED LINE CROSSED
+{{ alert.title }}
+{% for label, value in facts %}
+{{ label }}: {{ value }}
+{% endfor %}
+{% if events %}
+
+Open items:
+{% for e in events %}- {{ e.label }}{% if e.amount %} · {{ e.amount }}{% endif %}
+
+{% endfor %}
+{% endif %}
+{% if narrative %}
+
+{{ narrative }}
+{% endif %}
+
+{{ week_label }} · as of {{ alert.as_of_date }} · rule {{ alert.rule_id }}
+{% if open_url %}
+
+Open in the app: {{ open_url }}
+{% endif %}

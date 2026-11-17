@@ -8,9 +8,18 @@ from sqlalchemy.orm import Session
 
 from cfo_agent.models import MemoryBlock, MemoryBlockRevision
 
-HUMAN_ONLY = frozenset({"kra_framework", "priority_weighting"})
+# Editor-managed blocks are rewritten from the KRA / weighting editors.
+MANAGED = frozenset({"kra_framework", "priority_weighting"})
+# Human-only: the model can never write them. cfo_notes holds what the CFO's
+# office writes directly; it is trusted. Agent-editable blocks are model-inferred.
+HUMAN_ONLY = MANAGED | frozenset({"cfo_notes"})
 AGENT_EDITABLE = frozenset({"cfo_observations", "quarter_narrative"})
 ALL_BLOCKS = HUMAN_ONLY | AGENT_EDITABLE
+PROMPT_ORDER = ("kra_framework", "priority_weighting", "cfo_notes", "cfo_observations", "quarter_narrative")
+
+
+def provenance(name: str) -> str:
+    return "model-inferred" if name in AGENT_EDITABLE else "cfo-office"
 
 
 class MemoryError(Exception):
@@ -28,12 +37,24 @@ def list_blocks(session: Session) -> list[MemoryBlock]:
     return session.query(MemoryBlock).order_by(MemoryBlock.name).all()
 
 
-def render_blocks_for_prompt(session: Session) -> str:
-    parts = []
-    for name in ("kra_framework", "priority_weighting", "cfo_observations", "quarter_narrative"):
+def render_blocks_for_prompt(session: Session, *, skip_managed: bool = False) -> str:
+    """Memory blocks labelled by provenance. Callers that already put the KRA
+    framework and weighting in the (cached) system prompt pass skip_managed=True so
+    the model is not sent the same framework twice."""
+    from cfo_agent.memory.safety import UNTRUSTED_PREAMBLE
+
+    parts = [UNTRUSTED_PREAMBLE]
+    for name in PROMPT_ORDER:
+        if skip_managed and name in MANAGED:
+            continue
         row = session.get(MemoryBlock, name)
-        if row:
-            parts.append(f"<memory_block name=\"{name}\" limit=\"{row.char_limit}\">\n{row.content}\n</memory_block>")
+        if row and row.content.strip():
+            src = provenance(name)
+            trusted = "false" if src == "model-inferred" else "true"
+            parts.append(
+                f"<memory_block name=\"{name}\" source=\"{src}\" trusted=\"{trusted}\" limit=\"{row.char_limit}\">\n"
+                f"{row.content}\n</memory_block>"
+            )
     return "\n\n".join(parts)
 
 
@@ -65,7 +86,8 @@ def set_block_content(
 ) -> MemoryBlock:
     if name not in ALL_BLOCKS:
         raise MemoryError(f"Unknown block {name}")
-    if enforce_agent_rules and edited_by == "agent" and name in HUMAN_ONLY:
+    if edited_by == "agent" and name in HUMAN_ONLY:
+        # Never bypassable: model output must not reach human-authored memory
         raise MemoryError(f"Block {name} is human-only; agent edits rejected")
 
     row = get_block(session, name)
@@ -104,6 +126,10 @@ def memory_replace(
         raise MemoryError(f"Block {block} is human-only")
     if old not in row.content:
         raise MemoryError(f"Old string not found in block {block}")
+    if edited_by == "agent":
+        from cfo_agent.memory.safety import sanitize_memory_text
+
+        new = sanitize_memory_text(new)
     content = row.content.replace(old, new, 1)
     set_block_content(session, block, content, edited_by=edited_by, reason=reason)
     return f"Replaced in {block}. New length={len(content)}/{row.char_limit}"
@@ -120,6 +146,10 @@ def memory_insert(
     row = get_block(session, block)
     if block in HUMAN_ONLY and edited_by == "agent":
         raise MemoryError(f"Block {block} is human-only")
+    if edited_by == "agent":
+        from cfo_agent.memory.safety import sanitize_memory_text
+
+        content = sanitize_memory_text(content)
     sep = "\n" if row.content and not row.content.endswith("\n") else ""
     new_content = row.content + sep + content
     set_block_content(session, block, new_content, edited_by=edited_by, reason=reason)
@@ -145,6 +175,7 @@ def ensure_seed_blocks(session: Session) -> None:
             weighting_to_prompt_block(get_active_weighting(session).content_json),
             10_000,
         ),
+        "cfo_notes": ("", 2000),
         "cfo_observations": ("No observations recorded yet.", 2000),
         "quarter_narrative": ("", 2000),
     }

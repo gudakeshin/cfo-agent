@@ -1,27 +1,58 @@
 <!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"/><title>Red-line alert</title></head>
-<body style="margin:0;padding:0;background:#1a0505;font-family:Georgia,'Times New Roman',serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:24px 0;">
-    <tr><td align="center">
-      <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="background:#ffffff;border:3px solid #b00020;">
-        <tr><td style="padding:24px 28px;background:#b00020;color:#ffffff;">
-          <div style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;">URGENT · RED LINE</div>
-          <div style="font-size:22px;font-weight:bold;margin-top:8px;">{{ alert.title }}</div>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+<title>Red line: {{ alert.title }}</title>
+<style>
+  body { margin: 0; padding: 0; -webkit-text-size-adjust: 100%; }
+  @media (max-width: 480px) { .pad { padding-left: 16px !important; padding-right: 16px !important; } .btn a { display: block !important; } }
+  @media (prefers-color-scheme: dark) {
+    .bg { background: #1a0a0a !important; }
+    .card { background: #1d1515 !important; color: #f1e8e8 !important; }
+    .muted { color: #b9a9a9 !important; }
+    .facts { background: #2a1d1d !important; }
+  }
+</style>
+</head>
+<body class="bg" style="margin:0;padding:0;background:#f4f6f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1a1a1a;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">{{ alert.title }}</div>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="bg" style="background:#f4f6f8;">
+    <tr><td align="center" style="padding:12px 8px;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="card" style="max-width:600px;background:#ffffff;border-radius:8px;overflow:hidden;border:2px solid #b00020;">
+        <tr><td class="pad" style="padding:20px 24px;background:#b00020;color:#ffffff;">
+          <div style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;">Red line crossed</div>
+          <div style="font-size:21px;line-height:1.3;font-weight:700;margin-top:8px;">{{ alert.title }}</div>
         </td></tr>
-        <tr><td style="padding:24px 28px;font-size:15px;line-height:1.5;color:#1a1a1a;">
-          <p>{{ alert.description }}</p>
-          <p style="font-size:13px;color:#5c6b73;">
-            Week {{ alert.week }} · as of {{ alert.as_of_date }} · rule {{ alert.rule_id }}
-          </p>
-          <pre style="background:#f7f9fa;padding:12px;font-size:12px;overflow:auto;">{{ alert.evidence_json }}</pre>
-          {% if alert.synthesis_json %}
-          <div style="margin-top:16px;padding-top:12px;border-top:1px solid #e8ecf0;">
-            <strong>Context</strong>
-            <pre style="white-space:pre-wrap;font-size:13px;">{{ alert.synthesis_json }}</pre>
-          </div>
+        <tr><td class="pad" style="padding:20px 24px 8px;font-size:15px;line-height:1.55;">
+          {% if facts %}
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="facts" style="background:#fbf1f2;border-radius:6px;">
+            {% for label, value in facts %}
+            <tr>
+              <td style="padding:10px 14px;font-size:14px;">{{ label }}</td>
+              <td align="right" style="padding:10px 14px;font-size:18px;font-weight:700;">{{ value }}</td>
+            </tr>
+            {% endfor %}
+          </table>
           {% endif %}
+          {% if events %}
+          <div class="muted" style="font-size:12px;letter-spacing:0.06em;text-transform:uppercase;color:#5c6b73;margin-bottom:4px;">Open items</div>
+          {% for e in events %}
+          <div style="padding:6px 0;font-size:15px;">{{ e.label }}{% if e.amount %} · <strong>{{ e.amount }}</strong>{% endif %}</div>
+          {% endfor %}
+          {% endif %}
+          {% if narrative %}
+          <p style="margin:16px 0 0;">{{ narrative }}</p>
+          {% endif %}
+          <p class="muted" style="font-size:12px;color:#5c6b73;margin:14px 0 0;">{{ week_label }} · as of {{ alert.as_of_date }} · rule {{ alert.rule_id }}</p>
         </td></tr>
+        {% if open_url %}
+        <tr><td class="pad btn" style="padding:8px 24px 22px;">
+          <a href="{{ open_url }}" style="display:inline-block;background:#b00020;color:#ffffff !important;text-decoration:none;font-weight:600;font-size:16px;padding:14px 22px;border-radius:8px;text-align:center;">Open in the app</a>
+        </td></tr>
+        {% endif %}
       </table>
     </td></tr>
   </table>

@@ -32,7 +32,29 @@ export function recentWeeks(count = 13): string[] {
   return weeks
 }
 
+/** Monday of an ISO week ("2026-W28" → Mon 6 Jul 2026, UTC). */
+export function isoWeekMonday(weekId: string): Date | null {
+  const m = /^(\d{4})-W(\d{1,2})$/.exec(weekId)
+  if (!m) return null
+  const year = Number(m[1])
+  const week = Number(m[2])
+  const jan4 = new Date(Date.UTC(year, 0, 4))
+  const day = jan4.getUTCDay() || 7
+  const monday = new Date(jan4)
+  monday.setUTCDate(jan4.getUTCDate() - day + 1 + (week - 1) * 7)
+  return monday
+}
+
+/** "2026-W28" → "Week 28 (6–12 Jul)". */
 export function formatWeekLabel(weekId: string): string {
   const [, w] = weekId.split('-W')
-  return `Week ${parseInt(w, 10)} · ${weekId}`
+  const mon = isoWeekMonday(weekId)
+  if (!mon || !w) return weekId
+  const sun = new Date(mon)
+  sun.setUTCDate(mon.getUTCDate() + 6)
+  const fmt = (d: Date, withMonth: boolean) =>
+    d.toLocaleDateString('en-IN', { day: 'numeric', ...(withMonth ? { month: 'short' } : {}), timeZone: 'UTC' })
+  const sameMonth = mon.getUTCMonth() === sun.getUTCMonth()
+  const range = sameMonth ? `${fmt(mon, false)}–${fmt(sun, true)}` : `${fmt(mon, true)} – ${fmt(sun, true)}`
+  return `Week ${parseInt(w, 10)} (${range})`
 }

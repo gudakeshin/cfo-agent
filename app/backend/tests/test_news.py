@@ -96,7 +96,7 @@ def _patch_search(monkeypatch, urls: list[str], findings_text: str = "Found some
             FakeToolResultBlock([FakeSearchResult(u) for u in urls]),
         ]
         client = FakeClient(response=FakeResponse(content))
-    monkeypatch.setattr("cfo_agent.news._client", lambda: client)
+    monkeypatch.setattr("cfo_agent.news._client", lambda *a: client)
     return client
 
 
@@ -105,7 +105,7 @@ def _patch_structure(monkeypatch, items: list[NewsBatchItem]):
     batch = NewsBatch(items=items)
 
     def _fake_parse(
-        schema, *, system, user, purpose, budget=None, max_tokens=4096, thinking=False, model=None
+        schema, *, system, user, purpose, budget=None, max_tokens=4096, thinking=False, model=None, provider=None
     ):
         if budget is not None:
             budget.calls += 1

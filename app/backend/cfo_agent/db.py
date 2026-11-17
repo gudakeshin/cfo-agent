@@ -51,20 +51,49 @@ def _sqlite_url(url: str) -> str:
     return url
 
 
+def is_postgres_url(url: str) -> bool:
+    return url.startswith(("postgresql", "postgres://"))
+
+
+_tenant_engines: dict[str, tuple[Engine, sessionmaker]] = {}
+_tenant_urls: dict[str, str] = {}  # the URL each cached engine was built for
+
+
 def get_engine() -> Engine:
     global _engine, _SessionLocal
+    from cfo_agent.tenancy import current_tenant
+
+    tenant = current_tenant()
+    if tenant is not None:
+        if tenant.id not in _tenant_engines or _tenant_urls.get(tenant.id) != tenant.database_url:
+            old = _tenant_engines.pop(tenant.id, None)  # the registry changed this tenant's database
+            if old is not None:
+                old[0].dispose()
+            eng = _make_engine(tenant.database_url)
+            _tenant_engines[tenant.id] = (eng, sessionmaker(bind=eng, autoflush=False, autocommit=False))
+            _tenant_urls[tenant.id] = tenant.database_url
+        return _tenant_engines[tenant.id][0]
     if _engine is not None:
         return _engine
+    _engine = _make_engine(get_settings().database_url)
+    _SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False)
+    return _engine
 
+
+def _make_engine(database_url: str) -> Engine:
+    if is_postgres_url(database_url):
+        url = database_url.replace("postgres://", "postgresql+psycopg://", 1)
+        if url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+        return create_engine(url, pool_pre_ping=True, pool_size=10, max_overflow=10, pool_recycle=1800)
     _check_loadable_extensions()
-    settings = get_settings()
-    url = _sqlite_url(settings.database_url)
-    _engine = create_engine(
+    url = _sqlite_url(database_url)
+    engine = create_engine(
         url,
         connect_args={"check_same_thread": False, "timeout": 30},
     )
 
-    @event.listens_for(_engine, "connect")
+    @event.listens_for(engine, "connect")
     def _on_connect(dbapi_conn, _connection_record):  # noqa: ANN001
         dbapi_conn.execute("PRAGMA journal_mode=WAL")
         dbapi_conn.execute("PRAGMA busy_timeout=30000")
@@ -79,50 +108,110 @@ def get_engine() -> Engine:
         except Exception as e:  # noqa: BLE001
             raise RuntimeError(f"Failed to load sqlite-vec extension: {e}") from e
 
-    _SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False)
-    return _engine
+    return engine
 
 
 def _ensure_column(conn, table: str, column: str, ddl: str) -> None:
-    """Add a column if missing (SQLite ALTER TABLE ADD COLUMN)."""
-    rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
-    existing = {r[1] for r in rows}
+    """Add a column if missing (lightweight migration for existing SQLite demo DBs)."""
+    from sqlalchemy import inspect
+
+    existing = {c["name"] for c in inspect(conn).get_columns(table)}
     if column not in existing:
         conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {ddl}"))
 
 
+def _rebuild_if_constraint_changed(conn, table: str, wanted: str) -> None:
+    """SQLite cannot alter constraints: copy the table into the current schema."""
+    sql = conn.execute(text("SELECT sql FROM sqlite_master WHERE type='table' AND name=:t"), {"t": table}).scalar()
+    if not sql or wanted in sql:
+        return
+    cols_old = [r[1] for r in conn.execute(text(f"PRAGMA table_info({table})"))]
+    for (name,) in conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=:t AND sql IS NOT NULL"
+    ), {"t": table}).fetchall():
+        conn.execute(text(f'DROP INDEX "{name}"'))
+    conn.execute(text(f"ALTER TABLE {table} RENAME TO {table}__old"))
+    tbl = Base.metadata.tables[table]
+    tbl.create(conn)
+    keep = [c for c in cols_old if c in tbl.c]
+    collist = ", ".join(keep)
+    conn.execute(text(f"INSERT INTO {table} ({collist}) SELECT {collist} FROM {table}__old"))
+    conn.execute(text(f"DROP TABLE {table}__old"))
+
+
+MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
+
+
+def run_migrations() -> None:
+    """Bring a PostgreSQL schema to the latest Alembic revision."""
+    from alembic import command
+    from alembic.config import Config
+
+    cfg = Config()
+    cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
+    # Several replicas may start at once: serialise migrations with an advisory lock.
+    with get_engine().connect() as lock_conn:
+        lock_conn.execute(text("SELECT pg_advisory_lock(727274001)"))
+        try:
+            command.upgrade(cfg, "head")
+        finally:
+            lock_conn.execute(text("SELECT pg_advisory_unlock(727274001)"))
+            lock_conn.commit()
+
+
 def init_db() -> None:
+    from cfo_agent.tenancy import for_each_tenant
+
+    for_each_tenant(_init_one)
+
+
+def _init_one() -> None:
     engine = get_engine()
+    if engine.dialect.name == "postgresql":
+        # Client deployments: versioned, reviewable schema changes.
+        run_migrations()
+        return
+    # SQLite demo: create everything and patch columns added since older demo DBs.
+    from cfo_agent import vectorstore
+
     Base.metadata.create_all(bind=engine)
-    # vec0 virtual tables for archival + chat embeddings (384-dim MiniLM)
     with engine.begin() as conn:
-        conn.execute(
-            text(
-                """
-                CREATE VIRTUAL TABLE IF NOT EXISTS archival_vec USING vec0(
-                    archival_id INTEGER PRIMARY KEY,
-                    embedding float[384]
-                )
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                CREATE VIRTUAL TABLE IF NOT EXISTS chat_vec USING vec0(
-                    message_id INTEGER PRIMARY KEY,
-                    embedding float[384]
-                )
-                """
-            )
-        )
-        # Lightweight migrations for existing DBs (create_all won't add columns)
+        vectorstore.create_tables(conn)
         _ensure_column(conn, "archival_memory", "content_hash", "content_hash VARCHAR(64)")
         _ensure_column(conn, "archival_memory", "scope", "scope VARCHAR(64) DEFAULT 'global'")
         _ensure_column(conn, "chat_messages", "scope", "scope VARCHAR(64) DEFAULT 'global'")
+        _ensure_column(conn, "digest_items", "evidence_snapshot_json", "evidence_snapshot_json JSON")
+        _ensure_column(conn, "digest_items", "verification_json", "verification_json JSON")
+        _ensure_column(conn, "chat_messages", "citations_json", "citations_json JSON")
+        _ensure_column(conn, "chat_messages", "verification_json", "verification_json JSON")
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_pipeline_run_active_week ON pipeline_runs (week) "
+            "WHERE status IN ('pending', 'running')"
+        ))
+        # Multi-entity / multi-currency columns (added after the first demo DBs)
+        for table in ("erp_customers", "erp_sales_invoices", "erp_purchase_invoices", "erp_expenses",
+                      "erp_revenue_daily", "erp_gst_events", "erp_covenants"):
+            _ensure_column(conn, table, "entity", "entity VARCHAR(32) NOT NULL DEFAULT 'MAIN'")
+        for table in ("erp_sales_invoices", "erp_receipts", "erp_purchase_invoices", "erp_payments", "erp_expenses"):
+            _ensure_column(conn, table, "currency", "currency VARCHAR(3) NOT NULL DEFAULT 'INR'")
+            _ensure_column(conn, table, "fx_rate", "fx_rate FLOAT NOT NULL DEFAULT 1")
+        for table in ("erp_customers", "erp_purchase_invoices"):
+            _ensure_column(conn, table, "is_intercompany", "is_intercompany BOOLEAN NOT NULL DEFAULT 0")
+        _ensure_column(conn, "signals", "context_json", "context_json JSON")
+        _ensure_column(conn, "connector_configs", "watermark", "watermark VARCHAR(64)")
+        # One cash row per account per day, revenue per entity: old demo DBs had a
+        # unique date (cash) / date+segment (revenue); rebuild those two tables.
+        _rebuild_if_constraint_changed(conn, "erp_cash_daily", "uq_cash_day_account")
+        _rebuild_if_constraint_changed(conn, "erp_revenue_daily", "uq_rev_day_seg_entity")
 
 
 def get_session() -> Session:
+    from cfo_agent.tenancy import current_tenant
+
+    tenant = current_tenant()
+    if tenant is not None:
+        get_engine()
+        return _tenant_engines[tenant.id][1]()
     if _SessionLocal is None:
         get_engine()
     assert _SessionLocal is not None

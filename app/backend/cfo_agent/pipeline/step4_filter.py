@@ -6,9 +6,12 @@ from sqlalchemy.orm import Session
 
 from cfo_agent.pipeline.schemas import Connection
 from cfo_agent.pipeline.step2_weight import WeightedSignal
-from cfo_agent.redlines import RuleFire, evaluate_rules
+from cfo_agent.redlines import RuleFire
 from cfo_agent.timeutil import week_sunday
 
+
+DEFAULT_CONNECT_BOOST = 0.15
+MAX_CONNECT_BOOST = 0.5
 
 # Surfacing bars by risk appetite (min priority_score)
 APPETITE_BAR = {
@@ -41,7 +44,6 @@ def step4_filter(
     """Returns (items, empty_bar). Red lines always surface."""
     rules = weighting.get("red_lines") or []
     as_of = week_sunday(week)
-    fires = evaluate_rules(session, rules, as_of=as_of, last_check_date=None)
 
     # For pipeline filter, evaluate standing level conditions (not just new events)
     # Re-run level rules without event first-check narrowing for GST — include open notices
@@ -56,7 +58,7 @@ def step4_filter(
             if not fn:
                 continue
             mr = fn(session, week)
-            if OPS[rule["operator"]](mr.value, float(rule["threshold"])):
+            if mr.available and OPS[rule["operator"]](mr.value, float(rule["threshold"])):
                 standing_fires.append(
                     RuleFire(
                         rule_id=rule["id"],
@@ -102,6 +104,11 @@ def step4_filter(
                     )
                 )
 
+    # Signals the Connect step tied to other signals get a bounded boost: a thread
+    # across KRAs is worth more than the same move in isolation.
+    connect_boost = float((weighting.get("preferences") or {}).get("connect_boost", DEFAULT_CONNECT_BOOST))
+    connect_boost = min(max(connect_boost, 0.0), MAX_CONNECT_BOOST)
+
     appetite = weighting.get("risk_appetite", "moderate")
     bar = APPETITE_BAR.get(appetite, 1.2)
     max_items = int((weighting.get("preferences") or {}).get("max_items", 7))
@@ -144,9 +151,11 @@ def step4_filter(
         mid = w.mapped.signal.metric_id
         if mid in seen_metrics:
             continue
-        if w.priority_score < bar:
-            continue
         cons = conn_by_sig.get(w.mapped.signal.signal_id, [])
+        boost = 1.0 + connect_boost * min(len(cons), 2) / 2 if cons else 1.0
+        score = w.priority_score * boost
+        if score < bar:
+            continue
         rel_ids = []
         for c in cons:
             rel_ids.extend(c.relationship_ids)
@@ -155,11 +164,11 @@ def step4_filter(
                 weighted=w,
                 is_red_line=False,
                 connections=cons,
-                priority_score=w.priority_score,
+                priority_score=score,
                 kra_ids=w.mapped.kra_ids,
                 signal_ids=[w.mapped.signal.signal_id],
                 relationship_ids=list(dict.fromkeys(rel_ids)),
-                score_decomp=w.score_decomp,
+                score_decomp={**w.score_decomp, "connect_boost": round(boost, 3), "priority_score": score},
             )
         )
         seen_metrics.add(mid)
@@ -167,5 +176,28 @@ def step4_filter(
     # Red lines first, then by score
     items.sort(key=lambda i: (0 if i.is_red_line else 1, -i.priority_score))
     items = items[:max_items]
+    # What moved each surfaced metric (by customer, vendor, cost centre…), computed
+    # here so the synthesis explains the move from records instead of guessing.
+    from cfo_agent.continuity import continuity_for, key_for_filter_item
+    from cfo_agent.drivers import compute_drivers
+    from cfo_agent.impact import compute_impact
+    from cfo_agent.periods import lens_for_digest
+
+    for it in items:
+        metric = it.weighted.mapped.signal.metric_id if it.weighted else (it.rule_fire.metric if it.rule_fire else None)
+        drivers = compute_drivers(session, metric, week)
+        if drivers:
+            it.score_decomp = {**it.score_decomp, "drivers": drivers}
+        events = ((it.rule_fire.evidence or {}).get("events") if it.rule_fire else None) or []
+        impact = compute_impact(session, metric, week, event_keys=[e["business_key"] for e in events] or None)
+        if impact:
+            it.score_decomp = {**it.score_decomp, "impact": impact}
+        periods = lens_for_digest(session, metric, week)
+        if periods:
+            it.score_decomp = {**it.score_decomp, "periods": periods}
+        it.score_decomp = {
+            **it.score_decomp,
+            "continuity": continuity_for(session, key_for_filter_item(it), week),
+        }
     empty_bar = len(items) == 0
     return items, empty_bar

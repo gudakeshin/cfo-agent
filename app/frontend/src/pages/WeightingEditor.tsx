@@ -1,8 +1,57 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
-import type { Kra, RedLine, RiskAppetite, WeightingContent } from '../api/types'
+import { extra } from '../api/extra'
+import { LearningPanel } from '../components/LearningPanel'
+import { RedLineBacktest } from '../components/RedLineBacktest'
+import type { Kra, PreviewRanking, RedLine, RiskAppetite, WeightingContent } from '../api/types'
 import { FaceWeightSliders } from '../components/FaceWeightSliders'
+import { useMetrics } from '../hooks/useMetrics'
+import { formatMetric } from '../utils/format'
+import { formatWeekLabel } from '../utils/weeks'
+
+// Fallback until the list of event types found in the client's data has loaded.
+const DEFAULT_EVENT_TYPES = [
+  { value: 'show_cause_notice', label: 'GST show-cause notice' },
+  { value: 'itc_mismatch', label: 'GST input-credit mismatch' },
+]
+type EventType = { value: string; label: string }
+
+const APPETITE_HELP: Record<RiskAppetite, string> = {
+  low: 'Surface more — even modest moves (Watch and above).',
+  moderate: 'Surface Medium and High priority moves.',
+  high: 'Surface only High priority moves.',
+}
+
+function ruleSentence(
+  rl: RedLine,
+  metricLabel: (id: string) => string,
+  unit: (id: string) => string,
+  eventTypes: EventType[] = DEFAULT_EVENT_TYPES,
+): string {
+  if (rl.type === 'event') {
+    const ev = eventTypes.find((e) => e.value === rl.event_type)?.label ?? rl.event_type ?? 'event'
+    return `Alert on any new ${ev}.`
+  }
+  const op = OPERATORS.find((o) => o.value === rl.operator)?.words ?? rl.operator
+  const thr = rl.threshold == null ? '…' : formatMetric(rl.threshold, unit(rl.metric ?? ''))
+  return `Alert when ${metricLabel(rl.metric ?? '')} is ${op} ${thr}.`
+}
+
+function validate(redLines: RedLine[]): string[] {
+  const errors: string[] = []
+  const seen = new Set<string>()
+  redLines.forEach((rl, i) => {
+    const n = `Red line ${i + 1}`
+    if (!rl.id.trim()) errors.push(`${n}: needs an ID.`)
+    else if (seen.has(rl.id.trim())) errors.push(`${n}: ID “${rl.id}” is used twice.`)
+    seen.add(rl.id.trim())
+    if (!rl.description.trim()) errors.push(`${n}: add a short description (it becomes the alert title).`)
+    if (rl.type === 'level' && (rl.threshold == null || Number.isNaN(rl.threshold)))
+      errors.push(`${n}: set a threshold.`)
+  })
+  return errors
+}
 
 const DEFAULT_FACES = { steward: 0.25, operator: 0.25, strategist: 0.25, catalyst: 0.25 }
 
@@ -20,11 +69,11 @@ const LEVEL_METRICS = [
 ]
 
 const OPERATORS = [
-  { value: 'lt', label: '<' },
-  { value: 'lte', label: '≤' },
-  { value: 'gt', label: '>' },
-  { value: 'gte', label: '≥' },
-  { value: 'eq', label: '=' },
+  { value: 'lt', label: '<', words: 'below' },
+  { value: 'lte', label: '≤', words: 'at or below' },
+  { value: 'gt', label: '>', words: 'above' },
+  { value: 'gte', label: '≥', words: 'at or above' },
+  { value: 'eq', label: '=', words: 'exactly' },
 ]
 
 function emptyLevelRule(id: string): RedLine {
@@ -58,6 +107,17 @@ export function WeightingEditor() {
   const [riskAppetite, setRiskAppetite] = useState<RiskAppetite>('moderate')
   const [redLines, setRedLines] = useState<RedLine[]>([])
   const [dragIndex, setDragIndex] = useState<number | null>(null)
+  const [loadedVersion, setLoadedVersion] = useState<number | null>(null)
+  const [confirmPreset, setConfirmPreset] = useState<string | null>(null)
+  const [presetNote, setPresetNote] = useState<string | null>(null)
+  const { byId: metricById, metrics } = useMetrics()
+  const { data: eventTypes = DEFAULT_EVENT_TYPES } = useQuery<EventType[]>({
+    queryKey: ['redline-event-types'],
+    queryFn: extra.eventTypes,
+    staleTime: 5 * 60_000,
+  })
+  const metricLabel = (id: string) => metricById.get(id)?.label ?? id
+  const metricUnit = (id: string) => metricById.get(id)?.unit ?? ''
 
   const { data: weighting } = useQuery({
     queryKey: ['weighting'],
@@ -75,9 +135,11 @@ export function WeightingEditor() {
   })
 
   const kraMap = new Map(kraFramework?.kras.map((k) => [k.id, k]) ?? [])
-  const metricOptions = kraFramework?.metric_map
-    ? Object.keys(kraFramework.metric_map)
-    : LEVEL_METRICS
+  const metricOptions = metrics.length
+    ? metrics.map((m) => m.id)
+    : kraFramework?.metric_map
+      ? Object.keys(kraFramework.metric_map)
+      : LEVEL_METRICS
 
   const applyContent = (content: WeightingContent) => {
     setLabel(content.label)
@@ -88,30 +150,74 @@ export function WeightingEditor() {
     setRedLines([...(content.red_lines ?? [])])
   }
 
+  // Only (re)load the form when a *different* version arrives — a background
+  // refetch of the same version must never wipe in-progress edits.
   useEffect(() => {
-    if (weighting?.content) applyContent(weighting.content)
-  }, [weighting])
+    if (weighting?.content && weighting.id !== loadedVersion) {
+      applyContent(weighting.content)
+      setLoadedVersion(weighting.id)
+    }
+  }, [weighting, loadedVersion])
 
-  const loadPresetMutation = useMutation({
-    mutationFn: (presetId: string) => api.loadWeightingPreset(presetId),
-    onSuccess: (data) => {
-      applyContent(data.content)
+  const draft: WeightingContent = useMemo(
+    () => ({
+      label,
+      defining_priority: definingPriority,
+      face_weights: faceWeights,
+      kra_ranks: kraRanks,
+      risk_appetite: riskAppetite,
+      red_lines: redLines,
+      preferences: weighting?.content.preferences ?? {},
+      // Learned multipliers are changed only through approved proposals; keep them on save
+      ...(weighting?.content.kra_multipliers ? { kra_multipliers: weighting.content.kra_multipliers } : {}),
+    }),
+    [label, definingPriority, faceWeights, kraRanks, riskAppetite, redLines, weighting],
+  )
+
+  const dirty = useMemo(() => {
+    if (!weighting?.content) return false
+    const c = weighting.content
+    const near = (a: Record<string, number>, b: Record<string, number>) =>
+      Object.keys({ ...a, ...b }).every((k) => Math.abs((a[k] ?? 0) - (b[k] ?? 0)) < 0.005)
+    return (
+      c.label !== label ||
+      c.defining_priority !== definingPriority ||
+      !near(c.face_weights, faceWeights) ||
+      JSON.stringify(c.kra_ranks) !== JSON.stringify(kraRanks) ||
+      c.risk_appetite !== riskAppetite ||
+      JSON.stringify(c.red_lines ?? []) !== JSON.stringify(redLines)
+    )
+  }, [weighting, label, definingPriority, faceWeights, kraRanks, riskAppetite, redLines])
+
+  useEffect(() => {
+    if (!dirty) return
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [dirty])
+
+  const errors = validate(redLines)
+
+  const loadPresetIntoDraft = (presetId: string) => {
+    const preset = presets.find((p) => p.id === presetId)
+    if (!preset) return
+    applyContent(preset.content)
+    setConfirmPreset(null)
+    setPresetNote(`“${preset.label}” loaded into the editor — not active until you save.`)
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: () => api.putWeighting(draft),
+    onSuccess: () => {
+      setPresetNote(null)
       queryClient.invalidateQueries({ queryKey: ['weighting'] })
     },
   })
 
-  const saveMutation = useMutation({
-    mutationFn: () =>
-      api.putWeighting({
-        label,
-        defining_priority: definingPriority,
-        face_weights: faceWeights,
-        kra_ranks: kraRanks,
-        risk_appetite: riskAppetite,
-        red_lines: redLines,
-        preferences: weighting?.content.preferences ?? {},
-      }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['weighting'] }),
+  const previewMutation = useMutation({
+    mutationFn: () => api.previewWeighting(draft),
   })
 
   const handleDragStart = (index: number) => setDragIndex(index)
@@ -155,22 +261,37 @@ export function WeightingEditor() {
     <div>
       <header className="page-header">
         <h1>Priority weighting</h1>
-        <p>This quarter&apos;s lens on the Four Faces — saving creates a new immutable version.</p>
+        <p>
+          This quarter&apos;s lens on the Four Faces. Edit, preview the effect on this week, then save — each
+          save is kept as a new version, and the next digest uses it.
+        </p>
       </header>
 
-      <div className="preset-row">
+      <div className="preset-row" role="group" aria-label="Start from a preset">
+        <span className="preset-label">Start from a preset:</span>
         {presets.map((p) => (
           <button
             key={p.id}
             type="button"
             className="chip-toggle"
-            onClick={() => loadPresetMutation.mutate(p.id)}
-            disabled={loadPresetMutation.isPending}
+            onClick={() => (dirty ? setConfirmPreset(p.id) : loadPresetIntoDraft(p.id))}
           >
             {p.label}
           </button>
         ))}
       </div>
+      {confirmPreset && (
+        <div className="inline-confirm-box" role="alertdialog" aria-label="Replace unsaved edits">
+          You have unsaved edits. Replace them with “{presets.find((p) => p.id === confirmPreset)?.label}”?
+          <button type="button" className="primary" onClick={() => loadPresetIntoDraft(confirmPreset)}>
+            Replace
+          </button>
+          <button type="button" onClick={() => setConfirmPreset(null)}>
+            Keep my edits
+          </button>
+        </div>
+      )}
+      {presetNote && <p className="verification-note">{presetNote}</p>}
 
       <div className="form-section">
         <label htmlFor="label">Label</label>
@@ -211,13 +332,19 @@ export function WeightingEditor() {
                   {kra?.name ?? id}
                 </span>
                 {kra?.grounding === 'none' && <span className="badge">no live feed</span>}
-                <button type="button" disabled={index === 0} onClick={() => moveKra(index, -1)}>
+                <button
+                  type="button"
+                  disabled={index === 0}
+                  onClick={() => moveKra(index, -1)}
+                  aria-label={`Move ${kra?.name ?? id} up`}
+                >
                   ↑
                 </button>
                 <button
                   type="button"
                   disabled={index === kraRanks.length - 1}
                   onClick={() => moveKra(index, 1)}
+                  aria-label={`Move ${kra?.name ?? id} down`}
                 >
                   ↓
                 </button>
@@ -241,6 +368,7 @@ export function WeightingEditor() {
             </button>
           ))}
         </div>
+        <p className="verification-note">{APPETITE_HELP[riskAppetite]}</p>
       </div>
 
       <div className="form-section">
@@ -260,7 +388,8 @@ export function WeightingEditor() {
           </thead>
           <tbody>
             {redLines.map((rl, index) => (
-              <tr key={`${rl.id}-${index}`}>
+              <Fragment key={`${rl.id}-${index}`}>
+              <tr>
                 <td>
                   <input
                     value={rl.id}
@@ -317,7 +446,7 @@ export function WeightingEditor() {
                       >
                         {metricOptions.map((m) => (
                           <option key={m} value={m}>
-                            {m}
+                            {metricLabel(m)}
                           </option>
                         ))}
                       </select>
@@ -334,36 +463,55 @@ export function WeightingEditor() {
                       <input
                         type="number"
                         step="any"
-                        value={rl.threshold ?? 0}
+                        aria-label="Threshold"
+                        value={rl.threshold ?? ''}
                         onChange={(e) =>
-                          updateRedLine(index, { threshold: Number(e.target.value) })
+                          updateRedLine(index, {
+                            threshold: e.target.value === '' ? undefined : Number(e.target.value),
+                          })
                         }
                         style={{ width: '5rem' }}
                       />
+                      <span className="unit">{metricUnit(rl.metric ?? '')}</span>
                     </div>
                   ) : (
                     <div className="redline-rule-row">
-                      <input
-                        value={rl.table ?? ''}
-                        onChange={(e) => updateRedLine(index, { table: e.target.value })}
-                        placeholder="table"
-                        style={{ width: '8rem' }}
-                      />
-                      <input
-                        value={rl.event_type ?? ''}
-                        onChange={(e) => updateRedLine(index, { event_type: e.target.value })}
-                        placeholder="event_type"
-                        style={{ width: '10rem' }}
-                      />
+                      <select
+                        aria-label="Event"
+                        value={rl.event_type ?? 'show_cause_notice'}
+                        onChange={(e) =>
+                          updateRedLine(index, { table: 'erp_gst_events', event_type: e.target.value })
+                        }
+                      >
+                        {(eventTypes.some((ev) => ev.value === rl.event_type) || !rl.event_type
+                          ? eventTypes
+                          : [...eventTypes, { value: rl.event_type, label: rl.event_type }]
+                        ).map((ev) => (
+                          <option key={ev.value} value={ev.value}>
+                            {ev.label}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   )}
                 </td>
                 <td>
-                  <button type="button" onClick={() => removeRedLine(index)}>
+                  <button
+                    type="button"
+                    onClick={() => removeRedLine(index)}
+                    aria-label={`Remove red line ${rl.id}`}
+                  >
                     Remove
                   </button>
                 </td>
               </tr>
+              <tr className="redline-sentence-row">
+                <td colSpan={5}>
+                  {ruleSentence(rl, metricLabel, metricUnit, eventTypes)}
+                  <RedLineBacktest rule={rl} unit={rl.metric ? metricUnit(rl.metric) : ''} />
+                </td>
+              </tr>
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -377,18 +525,83 @@ export function WeightingEditor() {
         </div>
       </div>
 
-      <button
-        type="button"
-        className="primary"
-        onClick={() => saveMutation.mutate()}
-        disabled={saveMutation.isPending}
-      >
-        Save weighting
-      </button>
+      <LearningPanel />
+
+      <div className="form-section preview-section">
+        <div className="preview-head">
+          <h3 style={{ margin: 0 }}>Preview the effect</h3>
+          <button
+            type="button"
+            onClick={() => previewMutation.mutate()}
+            disabled={previewMutation.isPending || errors.length > 0}
+          >
+            {previewMutation.isPending ? 'Re-ranking…' : 'Preview on latest week'}
+          </button>
+        </div>
+        <p className="verification-note">
+          Re-ranks the latest week&apos;s numbers under your draft, without saving and without AI calls.
+        </p>
+        {previewMutation.isError && <p className="error-text">{(previewMutation.error as Error).message}</p>}
+        {previewMutation.data && (
+          <>
+            <p>
+              <strong>{formatWeekLabel(previewMutation.data.week)}:</strong> the current weighting surfaces{' '}
+              {previewMutation.data.active.surfaced_count} item(s); your draft would surface{' '}
+              {previewMutation.data.draft.surfaced_count}.
+            </p>
+            <div className="preview-grid">
+              <PreviewColumn title="Current weighting" ranking={previewMutation.data.active} />
+              <PreviewColumn title="Your draft" ranking={previewMutation.data.draft} />
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="save-bar">
+        {dirty ? <span className="badge-dirty">Unsaved changes</span> : <span className="verification-note">All changes saved</span>}
+        <button
+          type="button"
+          className="primary"
+          onClick={() => saveMutation.mutate()}
+          disabled={saveMutation.isPending || errors.length > 0 || !dirty}
+        >
+          {saveMutation.isPending ? 'Saving…' : 'Save as new version'}
+        </button>
+      </div>
+      {errors.length > 0 && (
+        <ul className="error-list" role="alert">
+          {errors.map((e) => (
+            <li key={e}>{e}</li>
+          ))}
+        </ul>
+      )}
       {saveMutation.isError && (
         <p className="error-text">{(saveMutation.error as Error).message}</p>
       )}
-      {saveMutation.isSuccess && <p className="success-text">Weighting saved as new version.</p>}
+      {saveMutation.isSuccess && !dirty && (
+        <p className="success-text">Saved. The next digest will use this weighting.</p>
+      )}
+    </div>
+  )
+}
+
+function PreviewColumn({ title, ranking }: { title: string; ranking: PreviewRanking }) {
+  return (
+    <div className="preview-col">
+      <h4>{title}</h4>
+      {ranking.red_lines.length > 0 && (
+        <p className="verification-note">
+          Red lines firing: {ranking.red_lines.map((r) => r.description).join('; ')}
+        </p>
+      )}
+      <ol>
+        {ranking.top.map((t) => (
+          <li key={t.id} className={t.surfaced ? 'surfaced' : 'below-bar'}>
+            <span>{t.label}</span>
+            <span className="preview-score">{t.surfaced ? 'surfaces' : 'below bar'}</span>
+          </li>
+        ))}
+      </ol>
     </div>
   )
 }

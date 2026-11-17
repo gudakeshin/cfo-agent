@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
+import { useMetrics } from '../hooks/useMetrics'
 import type { FaceKey, Kra, KraRelationship } from '../api/types'
+import { TemplatePicker } from '../components/TemplatePicker'
 
 const FACES: FaceKey[] = ['steward', 'operator', 'strategist', 'catalyst']
 const FACE_LABELS: Record<FaceKey, string> = {
@@ -38,6 +40,7 @@ function nextRelId(rels: KraRelationship[]): string {
 }
 
 export function KraEditor() {
+  const { labels: metricLabels } = useMetrics()
   const queryClient = useQueryClient()
 
   const [label, setLabel] = useState('')
@@ -67,6 +70,26 @@ export function KraEditor() {
     setRelationships(framework.relationships.map((r) => ({ ...r })))
     setWarnings([])
   }, [framework])
+
+  const loadTemplate = (body: Record<string, unknown>, name: string) => {
+    const faces = (body.faces ?? {}) as Record<string, { kras?: Partial<Kra>[] }>
+    const loaded: WorkingKra[] = []
+    for (const [face, f] of Object.entries(faces)) {
+      for (const k of f.kras ?? []) {
+        loaded.push({
+          id: String(k.id), name: String(k.name ?? ''), face: face as FaceKey,
+          grounding: String(k.grounding ?? 'erp'), metrics: [...(k.metrics ?? [])],
+          concerns: [...(k.concerns ?? [])], note: k.note ?? '',
+        } as WorkingKra)
+      }
+    }
+    const rels = ((body.relationships ?? []) as KraRelationship[]).map((r) => ({ ...r }))
+    setLabel(String(body.label ?? name))
+    setRegulatoryContext(String(body.india_regulatory_context ?? ''))
+    setKras(loaded)
+    setRelationships(rels)
+    setNotice(`Loaded the “${name}” template — review it, then Save to create a new framework version.`)
+  }
 
   const registryMetrics = framework?.registry_metrics ?? []
   const rankedIds = new Set(weighting?.content.kra_ranks ?? [])
@@ -211,6 +234,8 @@ export function KraEditor() {
 
       {notice && <p className="success-text">{notice}</p>}
 
+      <TemplatePicker onLoad={loadTemplate} />
+
       <div className="form-section">
         <label htmlFor="kra-label">Label</label>
         <input id="kra-label" value={label} onChange={(e) => setLabel(e.target.value)} />
@@ -281,8 +306,10 @@ export function KraEditor() {
                                   type="button"
                                   className={`chip-toggle${k.metrics.includes(m) ? ' active' : ''}`}
                                   onClick={() => toggleMetric(k.id, m)}
+                                  aria-pressed={k.metrics.includes(m)}
+                                  title={m}
                                 >
-                                  {m}
+                                  {metricLabels.get(m) ?? m}
                                 </button>
                               ))}
                             </div>
@@ -381,7 +408,7 @@ export function KraEditor() {
                   <select value={r.from} onChange={(e) => updateRelationship(r.id, { from: e.target.value })}>
                     {kras.map((k) => (
                       <option key={k.id} value={k.id}>
-                        {k.id}
+                        {k.id} · {k.name}
                       </option>
                     ))}
                   </select>
@@ -390,7 +417,7 @@ export function KraEditor() {
                   <select value={r.to} onChange={(e) => updateRelationship(r.id, { to: e.target.value })}>
                     {kras.map((k) => (
                       <option key={k.id} value={k.id}>
-                        {k.id}
+                        {k.id} · {k.name}
                       </option>
                     ))}
                   </select>

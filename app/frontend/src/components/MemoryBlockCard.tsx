@@ -43,6 +43,7 @@ export function MemoryBlockCard({ block }: Props) {
         <span>
           {content.length}/{block.char_limit} chars
           {readOnly ? ' · read only' : block.agent_editable ? ' · agent editable' : ' · human only'}
+          {block.provenance === 'model-inferred' ? ' · inferred by the model (treated as untrusted notes)' : block.provenance ? ' · written by the CFO office' : ''}
         </span>
       </header>
       <div className="content-area">

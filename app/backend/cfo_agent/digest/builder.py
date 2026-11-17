@@ -52,6 +52,8 @@ def persist_digest(
             priority_score=fi.priority_score,
             score_decomp_json=fi.score_decomp,
             relationship_ids_json=fi.relationship_ids,
+            evidence_snapshot_json=getattr(s, "evidence_snapshot", None) or {},
+            verification_json=getattr(s, "verification", None) or {},
         )
         session.add(item)
     session.flush()

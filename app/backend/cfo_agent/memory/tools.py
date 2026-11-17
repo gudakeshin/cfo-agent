@@ -112,10 +112,14 @@ def dispatch_tool(
                 reason=args.get("reason", "memory_insert"),
             )
         if name == "archival_insert":
+            from cfo_agent.memory.safety import sanitize_memory_text
+
+            meta = {k: v for k, v in dict(args.get("metadata") or {}).items() if isinstance(v, (str, int, float, bool))}
+            meta["provenance"] = "model-inferred"
             row = arch.archival_insert(
                 session,
-                args["text"],
-                args.get("metadata") or {},
+                sanitize_memory_text(args["text"], 1500),
+                meta,
                 week=args.get("week"),
             )
             return json.dumps({"id": row.id, "ok": True})
@@ -131,5 +135,7 @@ def dispatch_tool(
             hits = rec.recall_search(session, args["query"])
             return json.dumps(hits, default=str)
         return json.dumps({"error": f"Unknown tool {name}"})
-    except Exception as e:  # noqa: BLE001
+    except blk.MemoryError as e:
         return json.dumps({"error": str(e)})
+    except Exception as e:  # noqa: BLE001
+        return json.dumps({"error": f"{name} failed ({type(e).__name__})"})

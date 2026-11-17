@@ -2,7 +2,9 @@
 
 A complete, demo-ready reasoning partner for a CFO of an Indian enterprise. Synthetic ERP data, Deloitte Four Faces KRA framework, dynamic priority weighting, six-step pipeline (Map → Weight → Connect → Filter → Synthesize → Surface), Letta-style persistent memory, weekly digests + red-line alerts, in-app UI + HTML email (outbox fallback).
 
-**Demo boundary:** single user, no auth, localhost. All Claude calls are real. ERP data is simulated.
+**Two modes.** The local demo (below) runs on SQLite with simulated ERP data and sign-in off.
+A client pilot runs in Docker on PostgreSQL with sign-in and roles, real ERP exports via the
+CSV file drop, a separate job worker and PII masking — see **[DEPLOYMENT.md](DEPLOYMENT.md)**.
 
 ## Prerequisites
 
@@ -58,8 +60,13 @@ uvicorn cfo_agent.main:app --host 127.0.0.1 --port 8000
 
 ```bash
 cd backend && source .venv/bin/activate
-pytest                 # deterministic suite (no API cost)
+pytest -m "not llm"    # deterministic suite (no API cost)
 pytest -m llm          # real Claude API tests (pipeline smoke + consolidation)
+
+# Same suite on PostgreSQL + pgvector:
+docker run -d --name cfo-pg -e POSTGRES_USER=cfo -e POSTGRES_PASSWORD=test -e POSTGRES_DB=cfo \
+  -p 55432:5432 pgvector/pgvector:pg16
+TEST_DATABASE_URL=postgresql+psycopg://cfo:test@127.0.0.1:55432/cfo pytest -m "not llm"
 ```
 
 ## Demo script (acceptance walkthrough)

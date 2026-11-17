@@ -22,6 +22,7 @@
 **/*.db
 **/*.db-*
 **/data/outbox/*.html
+**/data/outbox/*/
 
 # Tooling / OS
 .DS_Store

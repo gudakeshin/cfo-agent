@@ -25,6 +25,8 @@ def step2_weight(
 ) -> list[WeightedSignal]:
     face_weights = weighting.get("face_weights") or {}
     kra_ranks = list(weighting.get("kra_ranks") or [])
+    # Per-KRA multipliers learned from CFO feedback (approved by a delegate)
+    learned = {k: float(v) for k, v in (weighting.get("kra_multipliers") or {}).items()}
     out: list[WeightedSignal] = []
     for m in mapped:
         if not m.kra_ids:
@@ -41,8 +43,9 @@ def step2_weight(
         face = framework.kras[primary].face
         fw = float(face_weights.get(face, 0.1))
         rb = rank_boost(primary, kra_ranks)
+        lm = learned.get(primary, 1.0)
         sev = float(m.signal.severity)
-        score = priority_score(fw, rb, sev)
+        score = priority_score(fw, rb * lm, sev)
         out.append(
             WeightedSignal(
                 mapped=m,
@@ -55,7 +58,9 @@ def step2_weight(
                     "face": face,
                     "face_weight": fw,
                     "rank_boost": rb,
+                    "learned_multiplier": lm,
                     "severity": sev,
+                    "context": m.signal.context_json or {},
                     "priority_score": score,
                     "primary_kra": primary,
                     "metric_id": m.signal.metric_id,

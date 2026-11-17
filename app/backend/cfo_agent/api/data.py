@@ -43,6 +43,10 @@ def _set_erp_seed(session: Session, seed: int) -> None:
 
 @router.post("/data/generate")
 def data_generate(body: GenerateBody):
+    from cfo_agent.settings import get_settings
+
+    if not get_settings().demo_mode:
+        raise HTTPException(403, detail="Synthetic data generation is disabled outside demo mode")
     session = get_session()
     try:
         digest_count = session.query(Digest).count()

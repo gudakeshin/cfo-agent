@@ -1,0 +1,65 @@
+template:
+  id: bfsi_nbfc
+  name: NBFC / financial services
+  description: Lending business under RBI scale-based regulation — liquidity, asset quality and capital. Asset-quality and ALM KRAs need a loan-book feed; until then they are tracked as ungrounded.
+  data_needed: [Loan book with DPD buckets (for GNPA / Stage 3), ALM buckets, GL with interest income / finance cost accounts, cash by bank account]
+version: "1.0.0"
+label: "NBFC — liquidity, asset quality and capital framework"
+india_regulatory_context: >
+  RBI Scale-Based Regulation for NBFCs, IRACP norms and Ind AS 109 ECL staging, Liquidity
+  Coverage Ratio and ALM returns, Fair Practices Code, KYC/AML, SEBI LODR for listed debt
+  (Reg 52 / 54), Companies Act.
+faces:
+  steward:
+    name: Steward
+    description: Liquidity, asset quality, regulatory compliance.
+    kras:
+      - {id: STW-1, name: Liquidity buffer, grounding: erp, metrics: [cash_balance_cr, covenant_headroom_cr],
+         concerns: [High-quality liquid assets below LCR need, Lender covenant headroom]}
+      - {id: STW-2, name: Asset quality (GNPA / Stage 3), grounding: none, metrics: [], concerns: [Rising 30+ DPD, ECL under-provisioning], note: "Needs loan-book DPD feed"}
+      - {id: STW-3, name: Tax and regulatory notices, grounding: erp, metrics: [gst_open_notices, gst_notice_exposure_cr],
+         concerns: [GST on processing fees, RBI inspection observations]}
+      - {id: STW-4, name: Statutory reporting readiness, grounding: erp, metrics: [board_pack_readiness_score, close_cycle_days],
+         concerns: [Reg 52 results timeline, ALM return accuracy]}
+  operator:
+    name: Operator
+    description: Cost of funds, opex, collections.
+    kras:
+      - {id: OPR-1, name: Opex to income, grounding: erp, metrics: [opex_ratio_pct, cost_center_variance_pct],
+         concerns: [Branch cost creep, Collection cost per account]}
+      - {id: OPR-2, name: Collections efficiency, grounding: erp, metrics: [collections_coverage_pct, ar_overdue_pct],
+         concerns: [Collection efficiency below 98%, Bounce rates]}
+      - {id: OPR-3, name: Reconciliation integrity, grounding: erp, metrics: [unreconciled_items],
+         concerns: [Suspense and escrow breaks]}
+  strategist:
+    name: Strategist
+    description: Growth, ALM and capital.
+    kras:
+      - {id: STR-1, name: Disbursement growth and mix, grounding: erp, metrics: [revenue_week_cr, segment_revenue_growth_pct, revenue_concentration_pct],
+         concerns: [Growth concentrated in unsecured lending]}
+      - {id: STR-2, name: ALM and refinancing, grounding: none, metrics: [], concerns: [Negative cumulative gaps in 1–12 month buckets], note: "Needs ALM bucket feed"}
+      - {id: STR-3, name: Capital adequacy (CRAR), grounding: none, metrics: [], concerns: [Tier 1 headroom for growth], note: "Needs CRAR computation feed"}
+      - {id: STR-4, name: Cash generation, grounding: erp, metrics: [free_cash_flow_cr], concerns: [Funding the book from operations]}
+  catalyst:
+    name: Catalyst
+    description: Governance and stakeholder confidence.
+    kras:
+      - {id: CAT-1, name: Rating-agency and lender narrative, grounding: erp, metrics: [cash_balance_cr, dso_days], concerns: [Liquidity story consistency]}
+      - {id: CAT-2, name: Risk culture, grounding: none, metrics: [], concerns: [Early-warning signals reaching credit committee], note: "Qualitative"}
+relationships:
+  - {id: REL-1, from: OPR-2, to: STW-1, description: "Collection shortfalls drain the liquidity buffer"}
+  - {id: REL-2, from: STR-1, to: STW-2, description: "Fast unsecured growth seeds future asset-quality stress"}
+  - {id: REL-3, from: STW-1, to: STR-2, description: "Thin liquidity forces short-tenor refinancing and ALM gaps"}
+  - {id: REL-4, from: STW-2, to: STR-3, description: "Provisioning for Stage 3 erodes capital adequacy"}
+  - {id: REL-5, from: OPR-1, to: STR-4, description: "Opex overruns reduce internal capital generation"}
+  - {id: REL-6, from: STW-1, to: CAT-1, description: "Liquidity signals shape rating-agency conversations"}
+weighting_preset:
+  label: "NBFC — liquidity first"
+  defining_priority: Keep the liquidity buffer and lender covenants safe while collections normalise.
+  face_weights: {steward: 0.45, operator: 0.25, strategist: 0.2, catalyst: 0.1}
+  kra_ranks: [STW-1, OPR-2, STR-1, STW-3, OPR-1]
+  risk_appetite: low
+  red_lines:
+    - {id: RL-1, type: level, metric: cash_balance_cr, operator: lt, threshold: 22.0, description: "Liquidity below buffer"}
+    - {id: RL-2, type: level, metric: collections_coverage_pct, operator: lt, threshold: 90.0, description: "Collections under 90% of dues"}
+  preferences: {max_items: 6, depth: standard, cadence: "Monday 08:00 IST", channel: in_app_and_email}

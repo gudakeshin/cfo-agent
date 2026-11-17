@@ -1,0 +1,42 @@
+# Declarative metric seeds (loaded once into metric_definitions; edit them in the
+# app under Metrics). See cfo_agent/metrics_dsl.py for the format. A metric only
+# produces weekly signals once a KRA lists it in the KRA framework.
+metrics:
+  - id: gross_margin_pct
+    label: Gross margin (last closed month)
+    unit: "%"
+    adverse_direction: down
+    description: Revenue less cost of materials, from the general ledger, as a share of revenue.
+    inputs:
+      revenue: {agg: sum, source: gl_entries, where: {account_type: revenue}, window: last_month, sign: -1}
+      cogs: {agg: sum, source: gl_entries, where: {account_type: cogs}, window: last_month}
+    formula: "100 * (revenue - cogs) / revenue"
+
+  - id: credit_note_ratio_pct
+    label: Credit notes to sales (30 days)
+    unit: "%"
+    adverse_direction: up
+    description: Value of credit notes issued as a share of invoiced sales over the last 30 days — a dispute and quality signal.
+    inputs:
+      notes: {agg: sum, source: credit_notes, window: trailing_30d}
+      sales: {agg: sum, source: sales_invoices, window: trailing_30d}
+    formula: "100 * notes / sales"
+
+  - id: revenue_week_cr
+    label: Revenue (week)
+    unit: "₹ Cr"
+    adverse_direction: down
+    description: Revenue booked in the week across all segments; compared with plan when a plan is loaded.
+    inputs:
+      revenue: {agg: sum, source: revenue_daily, window: week}
+    formula: "revenue"
+
+  - id: export_revenue_share_pct
+    label: Export share of revenue (week)
+    unit: "%"
+    adverse_direction: null
+    description: Exports segment revenue as a share of all revenue in the week — FX exposure indicator.
+    inputs:
+      exports: {agg: sum, source: revenue_daily, where: {segment: Exports}, window: week}
+      total: {agg: sum, source: revenue_daily, window: week}
+    formula: "100 * exports / total"

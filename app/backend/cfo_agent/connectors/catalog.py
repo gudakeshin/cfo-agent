@@ -15,7 +15,14 @@ from dataclasses import dataclass, field
 
 from cfo_agent.models import (
     Base,
+    ErpBankAccount,
     ErpCashDaily,
+    ErpCreditNote,
+    ErpEntity,
+    ErpFxRate,
+    ErpDebtBalance,
+    ErpGlEntry,
+    ErpInventoryBalance,
     ErpCovenant,
     ErpCustomer,
     ErpExpense,
@@ -34,6 +41,8 @@ class ConfigField:
     key: str
     label: str
     secret: bool = False
+    multiline: bool = False  # textarea (e.g. a JSON map of SQL queries)
+    placeholder: str = ""
 
 
 @dataclass(frozen=True)
@@ -48,6 +57,9 @@ class ConnectorDef:
     brand_color: str
     # Only set for the two EPM connectors that share ErpPlanMetric ('plan'|'analytics')
     plan_kind: str | None = field(default=None)
+    # False for real connectors (e.g. the CSV file drop) that load into the same
+    # tables as the simulated ones; they are excluded from the demo ownership map.
+    simulated: bool = field(default=True)
 
 
 CONNECTORS: list[ConnectorDef] = [
@@ -61,7 +73,7 @@ CONNECTORS: list[ConnectorDef] = [
             ConfigField("tenant_url", "Tenant URL"),
             ConfigField("client_secret", "Client Secret", secret=True),
         ],
-        owned_models=[ErpSalesInvoice, ErpReceipt, ErpPurchaseInvoice, ErpPayment, ErpGstEvent],
+        owned_models=[ErpEntity, ErpSalesInvoice, ErpReceipt, ErpCreditNote, ErpPurchaseInvoice, ErpPayment, ErpGstEvent, ErpGlEntry, ErpInventoryBalance],
         brand_initials="S4",
         brand_color="#0FAAFF",
     ),
@@ -75,7 +87,7 @@ CONNECTORS: list[ConnectorDef] = [
             ConfigField("instance_url", "Instance URL"),
             ConfigField("password", "Password", secret=True),
         ],
-        owned_models=[ErpCashDaily, ErpCovenant],
+        owned_models=[ErpBankAccount, ErpFxRate, ErpCashDaily, ErpCovenant, ErpDebtBalance],
         brand_initials="OF",
         brand_color="#F80000",
     ),
@@ -138,11 +150,72 @@ CONNECTORS: list[ConnectorDef] = [
     ),
 ]
 
+# Real connector: ERP exports dropped as CSV files (works with SAP, Oracle, Tally…).
+CSV_DROP = ConnectorDef(
+    id="csv_drop",
+    vendor="Any ERP",
+    display_name="File drop (CSV exports)",
+    auth_type="file",
+    config_fields=[ConfigField("folder", "Inbox folder name")],
+    owned_models=[
+        ErpEntity, ErpBankAccount, ErpFxRate, ErpCustomer, ErpCovenant, ErpSalesInvoice, ErpReceipt,
+        ErpCreditNote, ErpPurchaseInvoice, ErpPayment, ErpExpense, ErpCashDaily, ErpRevenueDaily,
+        ErpGstEvent, ErpGlEntry, ErpPlanMetric, ErpInventoryBalance, ErpDebtBalance,
+    ],
+    brand_initials="CSV",
+    brand_color="#2F6B4F",
+    simulated=False,
+)
+CONNECTORS.append(CSV_DROP)
+
+# Real connector: Tally Prime / ERP 9 over its XML HTTP server (read-only exports).
+TALLY = ConnectorDef(
+    id="tally",
+    vendor="Tally Solutions",
+    display_name="Tally Prime",
+    auth_type="none",
+    config_fields=[
+        ConfigField("url", "Tally XML server URL", placeholder="http://tally-host:9000"),
+        ConfigField("company", "Company name (as open in Tally)"),
+        ConfigField("entity", "Entity code in this app", placeholder="MAIN"),
+        ConfigField("default_terms_days", "Default credit days", placeholder="45"),
+    ],
+    owned_models=[ErpCustomer, ErpSalesInvoice, ErpReceipt, ErpCreditNote, ErpPurchaseInvoice, ErpPayment],
+    brand_initials="TP",
+    brand_color="#1F5AA6",
+    simulated=False,
+)
+CONNECTORS.append(TALLY)
+
+# Real connector: the client's own SELECTs against a reporting replica, read-only login.
+SQL_READONLY = ConnectorDef(
+    id="sql_readonly",
+    vendor="Any SQL database",
+    display_name="Database (read-only SQL)",
+    auth_type="db_url",
+    config_fields=[
+        ConfigField("queries", "Queries — JSON {table: SELECT …}", multiline=True,
+                    placeholder='{"sales_invoices": "SELECT inv_no AS business_key, … FROM ar_invoices WHERE updated_at > :since"}'),
+        ConfigField("database_url", "Database URL (read-only user)", secret=True,
+                    placeholder="postgresql+psycopg://cfo_reader:…@replica:5432/erp"),
+    ],
+    owned_models=[
+        ErpEntity, ErpBankAccount, ErpFxRate, ErpCustomer, ErpCovenant, ErpSalesInvoice, ErpReceipt,
+        ErpCreditNote, ErpPurchaseInvoice, ErpPayment, ErpExpense, ErpCashDaily, ErpRevenueDaily,
+        ErpGstEvent, ErpGlEntry, ErpPlanMetric, ErpInventoryBalance, ErpDebtBalance,
+    ],
+    brand_initials="SQL",
+    brand_color="#5B4B8A",
+    simulated=False,
+)
+CONNECTORS.append(SQL_READONLY)
+EXTRACTOR_IDS = {"tally", "sql_readonly"}
+
 CATALOG_BY_ID: dict[str, ConnectorDef] = {c.id: c for c in CONNECTORS}
 
 # table name -> model class, across every owned table in the catalog
 MODEL_BY_TABLE: dict[str, type[Base]] = {
-    m.__tablename__: m for c in CONNECTORS for m in c.owned_models
+    m.__tablename__: m for c in CONNECTORS if c.simulated for m in c.owned_models
 }
 
 # table name -> [connector ids that own it]. Every ERP table should have exactly
@@ -150,6 +223,8 @@ MODEL_BY_TABLE: dict[str, type[Base]] = {
 # tests/test_connectors.py::test_catalog_ownership_integrity).
 OWNERSHIP: dict[str, list[str]] = {}
 for _c in CONNECTORS:
+    if not _c.simulated:
+        continue
     for _m in _c.owned_models:
         OWNERSHIP.setdefault(_m.__tablename__, []).append(_c.id)
 

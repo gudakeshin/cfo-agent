@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from cfo_agent.db import get_session
 from cfo_agent.digest.email import send_digest_email
 from cfo_agent.models import Digest, DigestItem, PipelineRun
-from cfo_agent.pipeline.orchestrator import run_pipeline, week_is_locked
+from cfo_agent.pipeline.orchestrator import WeekBusy, reserve_week, run_pipeline
 from cfo_agent.weighting import get_active_weighting
 
 router = APIRouter()
@@ -21,30 +21,23 @@ class GenerateDigestBody(BaseModel):
 def generate_digest(body: GenerateDigestBody, background_tasks: BackgroundTasks):
     session = get_session()
     try:
-        locked = week_is_locked(body.week)
-        if locked:
-            raise HTTPException(409, detail=f"Run {locked} already in progress for {body.week}")
-        # Also check DB for running
-        running = (
-            session.query(PipelineRun)
-            .filter_by(week=body.week, status="running")
-            .first()
-        )
-        if running:
-            raise HTTPException(409, detail=f"Run {running.id} already running for {body.week}")
-
         wv_id = body.weighting_version
         if wv_id is None:
             wv_id = get_active_weighting(session).id
-
-        run = PipelineRun(
-            week=body.week,
-            weighting_version_id=wv_id,
-            status="pending",
-        )
-        session.add(run)
-        session.commit()
+        try:
+            run = reserve_week(session, body.week, wv_id)
+        except WeekBusy as e:
+            raise HTTPException(409, detail=f"A digest run for {body.week} is already in progress") from e
         rid = run.id
+        from cfo_agent.settings import get_settings
+
+        if get_settings().job_mode == "queue":
+            # Durable: survives a restart or deploy, retried if the worker dies mid-run.
+            from cfo_agent.jobqueue import enqueue
+
+            job_id, _ = enqueue("digest", {"week": body.week, "weighting_version_id": wv_id, "run_id": rid},
+                                max_attempts=2, created_by="api")
+            return {"run_id": rid, "week": body.week, "status": "pending", "job_id": job_id}
         background_tasks.add_task(run_pipeline, rid, body.week, wv_id)
         return {"run_id": rid, "week": body.week, "status": "pending"}
     finally:
@@ -114,6 +107,7 @@ def get_digest(digest_id: int):
                     "priority_score": i.priority_score,
                     "score_decomp": i.score_decomp_json,
                     "relationship_ids": i.relationship_ids_json,
+                    "verification": i.verification_json or {},
                 }
                 for i in items
             ],

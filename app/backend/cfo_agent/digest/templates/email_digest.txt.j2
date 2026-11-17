@@ -1,0 +1,41 @@
+CFO BRIEFING · {{ week_label }}
+{{ digest.headline }}
+{% if open_url %}
+
+Open the briefing: {{ open_url }}
+{% endif %}
+{% if data_health and (data_health.stale or data_health.warnings) %}
+
+DATA HEALTH
+{% for w in data_health.warnings %}- {{ w }}
+{% endfor %}
+{% endif %}
+{% if digest.empty_bar or not items %}
+
+Nothing met the surfacing bar this week under the current risk appetite.
+{% endif %}
+{% for item in items %}
+
+----------------------------------------
+#{{ item.rank }} · {% if item.is_red_line %}RED LINE{% else %}{{ item.priority }}{% endif %}{% if item.status %} · {{ item.status }}{% endif %}
+
+{{ item.title }}
+
+{{ item.what }}
+{% if item.movers %}
+Moved by: {{ item.movers | join(' · ') }}
+{% endif %}
+{% if item.action %}
+DO THIS: {{ item.action }}
+{% endif %}
+{% if item.url %}
+Why it matters and the evidence: {{ item.url }}
+{% endif %}
+{% endfor %}
+{% if ask_url %}
+
+Ask a question about this briefing: {{ ask_url }}
+{% endif %}
+
+----------------------------------------
+Lens: {{ digest.weighting_label }}. The agent advises; it never acts.

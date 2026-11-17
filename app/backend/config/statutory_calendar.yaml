@@ -1,0 +1,41 @@
+# Standard Indian statutory due dates, shown in the Briefing's "Coming deadlines".
+# These are the dates in the law. Extensions, notified relief and holiday roll-overs
+# are NOT applied, and the app does not know whether a return has been filed.
+# Edit freely: `monthly` repeats on that day each month; `annual` repeats on that month and day.
+deadlines:
+  - id: tds_deposit
+    label: TDS / TCS deposit (previous month)
+    authority: Income Tax
+    monthly: 7
+  - id: gstr1
+    label: GSTR-1 (monthly filers)
+    authority: GST
+    monthly: 11
+  - id: pf_esi
+    label: PF and ESI contributions
+    authority: EPFO / ESIC
+    monthly: 15
+  - id: gstr3b
+    label: GSTR-3B and tax payment
+    authority: GST
+    monthly: 20
+  - id: advance_tax_q1
+    label: Advance tax, 1st instalment (15%)
+    authority: Income Tax
+    annual: {month: 6, day: 15}
+  - id: advance_tax_q2
+    label: Advance tax, 2nd instalment (45% cumulative)
+    authority: Income Tax
+    annual: {month: 9, day: 15}
+  - id: advance_tax_q3
+    label: Advance tax, 3rd instalment (75% cumulative)
+    authority: Income Tax
+    annual: {month: 12, day: 15}
+  - id: advance_tax_q4
+    label: Advance tax, final instalment (100%)
+    authority: Income Tax
+    annual: {month: 3, day: 15}
+  - id: gstr9
+    label: GSTR-9 annual return (previous financial year)
+    authority: GST
+    annual: {month: 12, day: 31}

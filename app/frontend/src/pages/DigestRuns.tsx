@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api } from '../api/client'
@@ -31,7 +31,7 @@ function stepStatus(
   return 'pending'
 }
 
-export function DigestInbox() {
+export function DigestRuns() {
   const { data: weeksData } = useQuery({
     queryKey: ['data-weeks'],
     queryFn: api.getDataWeeks,
@@ -46,27 +46,6 @@ export function DigestInbox() {
       setWeek(weeks[Math.max(0, weeks.length - 2)])
     }
   }, [weeks, week])
-
-  const { data: digests = [], isLoading, error } = useQuery({
-    queryKey: ['digests'],
-    queryFn: api.listDigests,
-  })
-
-  const { data: alerts = [] } = useQuery({
-    queryKey: ['alerts', 'active'],
-    queryFn: () => api.listAlerts(true),
-  })
-
-  const { data: feedback } = useQuery({
-    queryKey: ['feedback'],
-    queryFn: api.listFeedback,
-  })
-
-  const { data: newsItems = [] } = useQuery({
-    queryKey: ['news', 'watch'],
-    queryFn: () => api.listNews({ limit: 20 }),
-  })
-  const watchItems = newsItems.filter((n) => n.relevance !== 'low').slice(0, 3)
 
   const { data: allRuns } = useQuery({ queryKey: ['runs'], queryFn: api.listRuns })
   useEffect(() => {
@@ -103,6 +82,8 @@ export function DigestInbox() {
   useEffect(() => {
     if (run?.status === 'completed' && run.digest_id) {
       queryClient.invalidateQueries({ queryKey: ['digests'] })
+      queryClient.invalidateQueries({ queryKey: ['briefing'] })
+      queryClient.invalidateQueries({ queryKey: ['runs'] })
     }
   }, [run?.status, run?.digest_id, queryClient])
 
@@ -111,42 +92,15 @@ export function DigestInbox() {
     run &&
     !['completed', 'failed', 'data_unavailable'].includes(run.status)
 
-  const avgInsights = useMemo(() => {
-    if (!digests.length) return '—'
-    const avg = digests.reduce((s, d) => s + d.item_count, 0) / digests.length
-    return avg.toFixed(1)
-  }, [digests])
-
   return (
     <div>
       <header className="page-header">
-        <h1>Digest inbox</h1>
+        <h1>Digest runs</h1>
         <p>
-          Weekly CFO intelligence — mapped to the Four Faces framework, weighted by this quarter&apos;s
-          priorities.
+          Digests are generated automatically each Monday. Use this page to run one on demand — for example
+          after changing the weighting — and to see the history of runs.
         </p>
       </header>
-
-      <div className="stats-row">
-        <div className="stat-block">
-          <div className="label">Digests this quarter</div>
-          <div className="value">{digests.length}</div>
-        </div>
-        <div className="stat-block accent-top">
-          <div className="label">Active red lines</div>
-          <div className="value danger">{alerts.length}</div>
-        </div>
-        <div className="stat-block">
-          <div className="label">Surfacing precision</div>
-          <div className="value success">
-            {feedback ? `${feedback.surfacing_precision_pct}%` : '—'}
-          </div>
-        </div>
-        <div className="stat-block">
-          <div className="label">Avg insights / week</div>
-          <div className="value">{avgInsights}</div>
-        </div>
-      </div>
 
       <div className="toolbar">
         <div className="field">
@@ -168,7 +122,7 @@ export function DigestInbox() {
           {showProgress ? 'Generating…' : 'Generate digest'}
         </button>
         <span className="toolbar-hint">
-          Pipeline: Map → Weight → Connect → Filter → Synthesize → Surface
+          Takes 1–2 minutes · six steps: map, weight, connect, filter, write, check evidence
         </span>
       </div>
 
@@ -218,55 +172,40 @@ export function DigestInbox() {
         </div>
       )}
 
-      {watchItems.length > 0 && (
-        <div className="panel regulatory-watch">
-          <div className="regulatory-watch-head">
-            <h3>Regulatory watch</h3>
-            <Link to="/news">View all →</Link>
-          </div>
-          <ul>
-            {watchItems.map((n) => (
-              <li key={n.id}>
-                <a href={n.url} target="_blank" rel="noreferrer">
-                  {n.title}
-                </a>
-                <div className="meta">
-                  {n.source_name && <span>{n.source_name}</span>}
-                  <span className={`badge-relevance ${n.relevance}`}>{n.relevance}</span>
-                </div>
-              </li>
-            ))}
-          </ul>
+      <h2 className="section-title">Recent runs</h2>
+      {!allRuns?.length ? (
+        <p className="empty-state">No runs yet.</p>
+      ) : (
+        <div className="table-scroll">
+          <table className="audit-table">
+            <thead>
+              <tr>
+                <th>Run</th>
+                <th>Week</th>
+                <th>Status</th>
+                <th>Cost</th>
+                <th>Started</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {allRuns.slice(0, 20).map((r) => (
+                <tr key={r.id}>
+                  <td>#{r.id}</td>
+                  <td>{formatWeekLabel(r.week)}</td>
+                  <td>
+                    <span className={`run-status ${r.status}`}>{r.status.replace('_', ' ')}</span>
+                    {r.error && <div className="verification-note">{r.error}</div>}
+                  </td>
+                  <td>${r.cost_usd.toFixed(2)}</td>
+                  <td>{new Date(r.created_at).toLocaleString()}</td>
+                  <td>{r.digest_id && <Link to={`/digests/${r.digest_id}`}>Open digest</Link>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
-
-      {isLoading && <p className="empty-state">Loading digests…</p>}
-      {error && <p className="error-text">{(error as Error).message}</p>}
-
-      {!isLoading && digests.length === 0 && (
-        <p className="empty-state">No digests yet — generate one for the selected week.</p>
-      )}
-
-      <ul className="digest-list">
-        {digests.map((d) => (
-          <li key={d.id}>
-            <Link to={`/digests/${d.id}`} className="digest-card">
-              <div className="digest-card-meta-row">
-                {d.empty_bar && <span className="badge-muted">Empty bar</span>}
-                <span className="week-mono">{formatWeekLabel(d.week)}</span>
-              </div>
-              <h3>{d.headline}</h3>
-              <div className="meta">
-                <span>{d.item_count} insights</span>
-                <span>·</span>
-                <span>{d.weighting_label}</span>
-                <span>·</span>
-                <span>{new Date(d.created_at).toLocaleString()}</span>
-              </div>
-            </Link>
-          </li>
-        ))}
-      </ul>
     </div>
   )
 }

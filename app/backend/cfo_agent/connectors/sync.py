@@ -19,7 +19,7 @@ from typing import Any
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import Session, sessionmaker
 
-from cfo_agent.connectors.catalog import ConnectorDef, get_connector
+from cfo_agent.connectors.catalog import EXTRACTOR_IDS, ConnectorDef, get_connector
 from cfo_agent.db import get_session
 from cfo_agent.models import (
     AppState,
@@ -370,6 +370,13 @@ def run_connector_sync(run_id: int) -> None:
             session.commit()
             return
 
+        if not connector.simulated:
+            if connector.id in EXTRACTOR_IDS:
+                _run_extractor(session, run, cfg)
+            else:
+                _run_file_drop(session, run, cfg)
+            return
+
         try:
             base_seed = get_erp_seed(session)
             # A nonzero seed_offset deliberately desyncs this connector's data
@@ -452,3 +459,125 @@ def scheduled_connector_sync(connector_id: str) -> int | None:
         session.close()
     run_connector_sync(run_id)
     return run_id
+
+
+FOLDER_RE = __import__("re").compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def file_drop_inbox(cfg: ConnectorConfig):
+    """Resolve the connector's inbox under CSV_INBOX_DIR (never outside it)."""
+    from cfo_agent.settings import get_settings
+
+    folder = str((cfg.config_json or {}).get("folder") or "default")
+    if not FOLDER_RE.match(folder):
+        raise ValueError("Inbox folder name may only contain letters, digits, '-' and '_'")
+    from cfo_agent.tenancy import current_tenant_id
+
+    tid = current_tenant_id()
+    base = get_settings().csv_inbox_dir
+    return (base / tid / folder) if tid else (base / folder)
+
+
+def _run_file_drop(session: Session, run: ConnectorSyncRun, cfg: ConnectorConfig) -> None:
+    from cfo_agent.connectors.csv_drop import process_inbox
+
+    try:
+        summary = process_inbox(session, file_drop_inbox(cfg), connector_id=cfg.id, run_id=run.id)
+        run.rows_pulled_json = summary
+        run.status = "error" if summary["rejected"] else "ok"
+        run.error = (
+            f"{summary['rejected']} file(s) rejected — see the error report next to each file in rejected/"
+            if summary["rejected"]
+            else None
+        )
+        cfg.last_status = run.status
+        cfg.last_run_at = datetime.utcnow()
+        run.finished_at = datetime.utcnow()
+        # Signals are recomputed (upserted) by the next pipeline run; the briefing's
+        # metric cache keys on a data fingerprint, so it refreshes on its own.
+        session.commit()
+        if summary["loaded"]:
+            from cfo_agent.pii import invalidate
+
+            invalidate()  # new customer/vendor names need aliases
+    except Exception as e:  # noqa: BLE001
+        session.rollback()
+        run.status = "error"
+        run.error = str(e)
+        run.finished_at = datetime.utcnow()
+        cfg.last_status = "error"
+        session.commit()
+        logger.exception("File-drop sync failed run_id=%s", run.id)
+
+
+def build_extractor(cfg: ConnectorConfig):
+    """Instantiate the extractor for a real connector from its stored config."""
+    import json as _json
+
+    from cfo_agent.security import decrypt_secret
+
+    conf = cfg.config_json or {}
+    if cfg.id == "tally":
+        from cfo_agent.connectors.tally import TallyExtractor
+
+        if not conf.get("url"):
+            raise ValueError("Set the Tally XML server URL")
+        terms = str(conf.get("default_terms_days") or "45")
+        return TallyExtractor(conf["url"], conf.get("company") or "", entity=conf.get("entity") or "MAIN",
+                              default_terms_days=int(terms) if terms.isdigit() else 45)
+    if cfg.id == "sql_readonly":
+        from cfo_agent.connectors.sql_source import SqlReadOnlyExtractor
+
+        raw = conf.get("queries") or "{}"
+        try:
+            queries = _json.loads(raw) if isinstance(raw, str) else dict(raw)
+        except ValueError:
+            raise ValueError("Queries must be a JSON object of {table: SELECT …}") from None
+        return SqlReadOnlyExtractor(decrypt_secret(cfg.secret) or "", queries)
+    raise ValueError(f"{cfg.id} is not an extractor connector")
+
+
+def _run_extractor(session: Session, run: ConnectorSyncRun, cfg: ConnectorConfig) -> None:
+    from cfo_agent.connectors.extractor import load_batch
+
+    try:
+        extractor = build_extractor(cfg)
+        since = None if run.mode == "full" else cfg.watermark
+        batch = extractor.extract(since)
+        summary = load_batch(session, batch, connector_id=cfg.id, run_id=run.id)
+        summary["watermark_from"] = since
+        if not summary["rejected"]:
+            cfg.watermark = batch.watermark  # only advance when every table loaded
+            summary["watermark_to"] = batch.watermark
+        run.rows_pulled_json = summary
+        run.status = "error" if summary["rejected"] else "ok"
+        run.error = (
+            f"{summary['rejected']} table(s) rejected — nothing from those tables was loaded; "
+            "the watermark was not advanced, so the next sync retries them"
+            if summary["rejected"] else None
+        )
+        cfg.last_status = run.status
+        cfg.last_run_at = datetime.utcnow()
+        run.finished_at = datetime.utcnow()
+        session.commit()
+        if summary["loaded"]:
+            from cfo_agent.pii import invalidate
+
+            invalidate()
+    except Exception as e:  # noqa: BLE001
+        session.rollback()
+        run.status = "error"
+        run.error = _safe_error(e)
+        run.finished_at = datetime.utcnow()
+        cfg.last_status = "error"
+        session.commit()
+        logger.exception("Extractor sync failed run_id=%s", run.id)
+
+
+def _safe_error(e: Exception) -> str:
+    """Error text for the UI without credentials (DB URLs can appear in driver errors)."""
+    import re as _re
+
+    msg = f"{type(e).__name__}: {e}"
+    msg = _re.sub(r"(\w+://[^:/@\s]+:)[^@\s]+@", r"\1***@", msg)
+    return msg[:500]

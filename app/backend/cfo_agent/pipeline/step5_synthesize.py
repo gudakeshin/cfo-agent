@@ -13,6 +13,23 @@ from cfo_agent.pipeline.step4_filter import FilterItem
 from cfo_agent.weighting import weighting_to_prompt_block
 
 
+def _with_display_amounts(obj):
+    """Add a pre-formatted ₹ string next to every *_paise field so the model never
+    converts paise itself (it got a ₹3.2 Cr notice wrong by 10× doing so)."""
+    from cfo_agent.timeutil import format_inr
+
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            out[k] = _with_display_amounts(v)
+            if k.endswith("_paise") and isinstance(v, (int, float)):
+                out[k.removesuffix("_paise") + "_inr"] = format_inr(int(v))
+        return out
+    if isinstance(obj, list):
+        return [_with_display_amounts(v) for v in obj]
+    return obj
+
+
 def step5_synthesize_item(
     session: Session,
     item: FilterItem,
@@ -21,22 +38,27 @@ def step5_synthesize_item(
     week: str,
     budget: LlmBudget,
     repair_errors: dict[str, str] | None = None,
+    earlier: list[str] | None = None,
 ) -> SynthesizeItemOutput:
-    allowed_cites: list[str] = []
+    from cfo_agent.pipeline.fallback import allowed_citations_for
+
+    allowed_cites = allowed_citations_for(item)
     payload: dict = {"week": week, "is_red_line": item.is_red_line}
 
     if item.weighted:
         s = item.weighted.mapped.signal
-        allowed_cites.append(s.signal_id)
-        allowed_cites.extend(s.lineage_json or [])
+        from cfo_agent.signals import metric_meta
+
         payload["signal"] = {
             "signal_id": s.signal_id,
             "metric_id": s.metric_id,
+            # The name the CFO sees in the app: use it, never the raw metric_id
+            "metric_label": metric_meta(s.metric_id)["label"],
             "value": s.value,
             "delta_wow": s.delta_wow,
             "kra_ids": item.kra_ids,
             "lineage": s.lineage_json,
-            "score_decomp": item.score_decomp,
+            "score_decomp": {k: v for k, v in item.score_decomp.items() if k not in ("drivers", "periods", "impact")},
         }
     if item.rule_fire:
         payload["red_line"] = {
@@ -44,13 +66,37 @@ def step5_synthesize_item(
             "description": item.rule_fire.description,
             "value": item.rule_fire.value,
             "threshold": item.rule_fire.threshold,
-            "evidence": item.rule_fire.evidence,
+            "evidence": _with_display_amounts(item.rule_fire.evidence),
         }
-        for ev in (item.rule_fire.evidence or {}).get("events") or []:
-            if "citation" in ev:
-                allowed_cites.append(ev["citation"])
-        for lid in (item.rule_fire.evidence or {}).get("lineage") or []:
-            allowed_cites.append(lid)
+
+    drivers = (item.score_decomp or {}).get("drivers")
+    if drivers:
+        payload["drivers"] = _with_display_amounts(drivers)
+
+    periods = (item.score_decomp or {}).get("periods")
+    if periods:
+        from cfo_agent.pipeline.fallback import period_display
+
+        payload["periods"] = period_display(item)
+
+    impact = (item.score_decomp or {}).get("impact")
+    if impact:
+        payload["impact"] = {
+            k: impact[k]
+            for k in ("label", "amount_inr", "per_day_inr", "basis", "deadline", "deadline_basis", "window_days", "citations")
+            if impact.get(k) not in (None, "", [])
+        }
+
+    if earlier:
+        payload["already_reported_above"] = earlier
+
+    continuity = (item.score_decomp or {}).get("continuity")
+    continuity_note = ""
+    if continuity:
+        from cfo_agent.continuity import continuity_prompt
+
+        payload["continuity"] = continuity
+        continuity_note = continuity_prompt(continuity) + " "
 
     if item.connections:
         payload["connections"] = [c.model_dump() for c in item.connections]
@@ -62,17 +108,22 @@ def step5_synthesize_item(
     past = archival_search(session, str(query), k=3, as_of_week=week)
     payload["past_insights"] = past
 
-    allowed_cites = list(dict.fromkeys(allowed_cites))
     system = [
         cached_system_block(
             framework_to_prompt_block(framework)
             + "\n\n"
             + weighting_to_prompt_block(weighting)
         ),
-        {"type": "text", "text": render_blocks_for_prompt(session)},
+        {"type": "text", "text": render_blocks_for_prompt(session, skip_managed=True)},
     ]
     repair_note = ""
-    if repair_errors:
+    if repair_errors and any(k.startswith("<continuity") for k in repair_errors):
+        repair_note = (
+            "\n\nREPAIR: your previous wording contradicted the record of earlier briefings. "
+            + " ".join(repair_errors.values())
+            + " Rewrite the item keeping the same citations and figures, fixing only that wording."
+        )
+    elif repair_errors:
         repair_note = (
             "\n\nREPAIR: your previous attempt cited IDs that do not resolve. "
             "Cite ONLY from ALLOWED_CITATIONS this time. Failed citations:\n"
@@ -81,7 +132,31 @@ def step5_synthesize_item(
     user = (
         "Synthesize one digest item for the CFO. "
         "Every factual claim must cite only from ALLOWED_CITATIONS. "
-        "Structure: title, what, why, connects, action — each with citations[]. "
+        "Structure: title, what, why, connects, action — each with citations[]; "
+        "'what' and 'why' MUST each carry at least one citation. "
+        "Only state figures that appear in ITEM (or in the cited records); do not derive new numbers. "
+        "For money, quote the *_inr fields verbatim; never convert *_paise values yourself. "
+        "If ITEM.drivers is present it lists the records that actually moved this metric: in 'what', name the "
+        "one or two largest by label and amount and cite each row's `citation`; base 'action' on them. "
+        "Do not say they explain the whole move unless drivers.reconciliation shows it, and if "
+        "`not_in_feed_inr` is material say that part is unexplained by the records. "
+        "If there are no drivers, do not speculate about causes. "
+        "If ITEM.impact is present, 'action' must say what acting is worth and by when, quoting impact.amount_inr "
+        "and/or impact.per_day_inr and impact.deadline verbatim (and the largest names it gives), and cite "
+        "impact.citations; never invent an amount or a date, and say where a deadline is only a usual window. "
+        "If ITEM.periods is present it shows the longer-period picture (month, quarter, year to date or versus a "
+        "year ago): you may add ONE sentence to 'why' on it, quoting its *_display fields verbatim, and only for "
+        "periods listed there; never invent a period, and never describe a trend the periods do not show. "
+        f"{continuity_note}"
+        "Refer to the metric by ITEM.signal.metric_label, never by its metric_id, and never write JSON field "
+        "names (such as not_in_feed or current_paise) — say it in plain words. "
+        "Be brief: 'what' at most three sentences, 'why' at most two, 'connects' at most one, 'action' at most "
+        "two; lead with the number and what moved it. "
+        "Stay inside the evidence: do not describe prior-week levels, trends or causes that are not in ITEM, and "
+        "recommend only actions that follow from the cited rows, the red line or the connections. "
+        "ITEM.already_reported_above lists findings stated in higher-ranked items of this same digest: do not "
+        "re-explain them — at most one short clause pointing back (e.g. 'see the cash item above') — and spend "
+        "this item on what is specific to this metric. "
         "If past_insights exist, reference continuity briefly.\n\n"
         f"ALLOWED_CITATIONS: {json.dumps(allowed_cites)}\n\n"
         f"ITEM:\n{json.dumps(payload, indent=2, default=str)}"

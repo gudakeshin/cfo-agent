@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import type { ConnectorConfig } from '../api/types'
+import { FileDropPanel } from './FileDropPanel'
 
 interface Props {
   connector: ConnectorConfig
@@ -97,7 +98,13 @@ export function ConnectorConfigModal({ connector, onClose }: Props) {
         </header>
 
         <div className="form-section">
-          <h3>Credentials</h3>
+          <h3>{connector.auth_type === 'file' || connector.auth_type === 'none' ? 'Settings' : 'Credentials'}</h3>
+          {connector.kind === 'extractor' && (
+            <p className="verification-note">
+              Read-only: this connector only runs exports / SELECTs. Incremental syncs resume from the high-water mark
+              {connector.watermark ? ` (now ${connector.watermark})` : ''}; run a full sync to pick up deletions.
+            </p>
+          )}
           {connector.config_fields.map((field) =>
             field.secret ? (
               <div key={field.key} style={{ marginBottom: 14 }}>
@@ -107,17 +114,29 @@ export function ConnectorConfigModal({ connector, onClose }: Props) {
                   type="password"
                   value={secret}
                   onChange={(e) => setSecret(e.target.value)}
-                  placeholder={connector.secret_masked ?? 'Not set'}
+                  placeholder={connector.secret_masked ?? field.placeholder ?? 'Not set'}
                 />
               </div>
             ) : (
               <div key={field.key} style={{ marginBottom: 14 }}>
                 <label htmlFor={`cfg-${field.key}`}>{field.label}</label>
-                <input
-                  id={`cfg-${field.key}`}
-                  value={config[field.key] ?? ''}
-                  onChange={(e) => setConfig((c) => ({ ...c, [field.key]: e.target.value }))}
-                />
+                {field.multiline ? (
+                  <textarea
+                    id={`cfg-${field.key}`}
+                    rows={8}
+                    className="mono-input"
+                    value={config[field.key] ?? ''}
+                    placeholder={field.placeholder}
+                    onChange={(e) => setConfig((c) => ({ ...c, [field.key]: e.target.value }))}
+                  />
+                ) : (
+                  <input
+                    id={`cfg-${field.key}`}
+                    value={config[field.key] ?? ''}
+                    placeholder={field.placeholder}
+                    onChange={(e) => setConfig((c) => ({ ...c, [field.key]: e.target.value }))}
+                  />
+                )}
               </div>
             ),
           )}
@@ -145,7 +164,7 @@ export function ConnectorConfigModal({ connector, onClose }: Props) {
           )}
           {testMutation.data && (
             <p className={testMutation.data.ok ? 'success-text' : 'error-text'}>
-              {testMutation.data.ok
+              {testMutation.data.ok || !testMutation.data.missing_fields
                 ? testMutation.data.message
                 : `Missing: ${(testMutation.data.missing_fields ?? []).join(', ')}`}
             </p>
@@ -154,6 +173,10 @@ export function ConnectorConfigModal({ connector, onClose }: Props) {
             <p className="error-text">{(testMutation.error as Error).message}</p>
           )}
         </div>
+
+        {connector.auth_type === 'file' && (
+          <FileDropPanel connectorId={connector.id} folder={config.folder ?? ''} />
+        )}
 
         <div className="form-section">
           <h3>Schedule</h3>
