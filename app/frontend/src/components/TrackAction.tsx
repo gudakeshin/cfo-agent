@@ -11,7 +11,7 @@ export function TrackAction({ item }: { item: DigestItem }) {
   const [open, setOpen] = useState(false)
   const [title, setTitle] = useState(item.action?.split(/(?<=\.)\s/)[0]?.slice(0, 200) || item.title)
   const [owner, setOwner] = useState('')
-  const [due, setDue] = useState('')
+  const [due, setDue] = useState(item.score_decomp?.impact?.deadline ?? '')
   const create = useMutation({
     mutationFn: () => extra.createAction({ title, owner, due_date: due || null, digest_item_id: item.id }),
     onSuccess: () => {

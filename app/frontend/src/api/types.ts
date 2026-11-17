@@ -48,7 +48,7 @@ export interface DigestItem {
   citations: Record<string, string[]> | CitationRef[] | string[]
   is_red_line: boolean
   priority_score: number
-  score_decomp: (Record<string, unknown> & { context?: SignalContext; drivers?: Drivers | null; continuity?: Continuity }) | null
+  score_decomp: (Record<string, unknown> & { context?: SignalContext; drivers?: Drivers | null; continuity?: Continuity; impact?: Impact | null }) | null
   relationship_ids: string[]
   verification?: {
     unverified_figures?: string[]
@@ -484,6 +484,19 @@ export interface BriefingChange {
   title: string
   is_red_line: boolean
   rank: number
+}
+
+export interface Impact {
+  label: string
+  amount_paise: number | null
+  amount_inr: string | null
+  per_day_paise?: number
+  per_day_inr?: string
+  basis: string
+  deadline: string | null
+  deadline_basis: string
+  citations: string[]
+  sentence: string
 }
 
 export interface BriefingKpi extends MetricMeta {

@@ -58,7 +58,7 @@ def step5_synthesize_item(
             "delta_wow": s.delta_wow,
             "kra_ids": item.kra_ids,
             "lineage": s.lineage_json,
-            "score_decomp": {k: v for k, v in item.score_decomp.items() if k not in ("drivers", "periods")},
+            "score_decomp": {k: v for k, v in item.score_decomp.items() if k not in ("drivers", "periods", "impact")},
         }
     if item.rule_fire:
         payload["red_line"] = {
@@ -78,6 +78,14 @@ def step5_synthesize_item(
         from cfo_agent.pipeline.fallback import period_display
 
         payload["periods"] = period_display(item)
+
+    impact = (item.score_decomp or {}).get("impact")
+    if impact:
+        payload["impact"] = {
+            k: impact[k]
+            for k in ("label", "amount_inr", "per_day_inr", "basis", "deadline", "deadline_basis", "window_days", "citations")
+            if impact.get(k) not in (None, "", [])
+        }
 
     if earlier:
         payload["already_reported_above"] = earlier
@@ -133,6 +141,9 @@ def step5_synthesize_item(
         "Do not say they explain the whole move unless drivers.reconciliation shows it, and if "
         "`not_in_feed_inr` is material say that part is unexplained by the records. "
         "If there are no drivers, do not speculate about causes. "
+        "If ITEM.impact is present, 'action' must say what acting is worth and by when, quoting impact.amount_inr "
+        "and/or impact.per_day_inr and impact.deadline verbatim (and the largest names it gives), and cite "
+        "impact.citations; never invent an amount or a date, and say where a deadline is only a usual window. "
         "If ITEM.periods is present it shows the longer-period picture (month, quarter, year to date or versus a "
         "year ago): you may add ONE sentence to 'why' on it, quoting its *_display fields verbatim, and only for "
         "periods listed there; never invent a period, and never describe a trend the periods do not show. "

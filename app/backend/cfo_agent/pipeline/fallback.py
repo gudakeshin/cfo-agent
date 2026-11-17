@@ -24,6 +24,7 @@ def allowed_citations_for(item: FilterItem) -> list[str]:
     from cfo_agent.drivers import driver_citations
 
     allowed.extend(driver_citations((item.score_decomp or {}).get("drivers")))
+    allowed.extend((((item.score_decomp or {}).get("impact")) or {}).get("citations") or [])
     return list(dict.fromkeys(allowed))
 
 
@@ -170,6 +171,13 @@ def deterministic_synthesis(item: FilterItem) -> SynthesizeItemOutput:
         why = f"It maps to {', '.join(item.kra_ids) or 'a ranked KRA'} and cleared the surfacing bar under the current weighting."
         action = "Ask the KRA owner to explain the movement using the cited records."
 
+    impact = (item.score_decomp or {}).get("impact") or {}
+    action_cites = list(evidence)
+    if impact.get("sentence"):
+        # The action is the quantified one: what it is worth, who is owed, and by when.
+        action = impact["sentence"]
+        action_cites = list(dict.fromkeys(evidence + (impact.get("citations") or [])))
+
     connects_text = "; ".join(c.narrative for c in item.connections) or "No cross-KRA connection identified."
     driver_text, driver_cites = _driver_sentence(item)
     return SynthesizeItemOutput(
@@ -177,7 +185,7 @@ def deterministic_synthesis(item: FilterItem) -> SynthesizeItemOutput:
         what=SectionBlock(text=what + driver_text + _period_sentence(item), citations=(primary or evidence) + driver_cites),
         why=SectionBlock(text=why, citations=primary or evidence),
         connects=SectionBlock(text=connects_text, citations=[]),
-        action=SectionBlock(text=action, citations=evidence),
+        action=SectionBlock(text=action, citations=action_cites),
     )
 
 

@@ -180,6 +180,7 @@ def step4_filter(
     # here so the synthesis explains the move from records instead of guessing.
     from cfo_agent.continuity import continuity_for, key_for_filter_item
     from cfo_agent.drivers import compute_drivers
+    from cfo_agent.impact import compute_impact
     from cfo_agent.periods import lens_for_digest
 
     for it in items:
@@ -187,6 +188,10 @@ def step4_filter(
         drivers = compute_drivers(session, metric, week)
         if drivers:
             it.score_decomp = {**it.score_decomp, "drivers": drivers}
+        events = ((it.rule_fire.evidence or {}).get("events") if it.rule_fire else None) or []
+        impact = compute_impact(session, metric, week, event_keys=[e["business_key"] for e in events] or None)
+        if impact:
+            it.score_decomp = {**it.score_decomp, "impact": impact}
         periods = lens_for_digest(session, metric, week)
         if periods:
             it.score_decomp = {**it.score_decomp, "periods": periods}

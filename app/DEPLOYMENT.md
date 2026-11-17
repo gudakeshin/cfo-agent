@@ -295,6 +295,12 @@ is ignored in multi-tenant mode. A tenant with no `email_to` gets no email: its 
 - **Statutory calendar** (Briefing, `GET /api/statutory-calendar`): the next due dates for TDS, GSTR-1, PF/ESI,
   GSTR-3B, advance tax and GSTR-9, from `config/statutory_calendar.yaml` (edit it to add or change dates).
   These are the standard dates only: extensions and holidays are not applied and filing status is not tracked.
+- **Action impact** (`impact.py`): where the records support it, the recommended action carries a rupee value
+  and a deadline, shown under the action on the card (hover for the basis) and used to pre-fill the due date
+  of "Track an action". Covered: past-due receivables and payables (and what one day of DSO / DPO is worth),
+  cash shortfall to the covenant buffer (or the date the trend crosses the covenant), open GST notices
+  (value; reply date = 30 days after the oldest open notice, stated as the usual window), input credit at
+  risk (before the next GSTR-3B), and what a day of inventory is worth. Other insights get no impact line.
 - **Memory safety**: notes the model infers from conversations are sanitised, labelled untrusted in every
   prompt, and can never overwrite the CFO office's own notes (`cfo_notes` block, Memory page).
 

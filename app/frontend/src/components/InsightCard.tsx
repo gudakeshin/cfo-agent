@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { DigestItem, MetricHistory } from '../api/types'
+import type { DigestItem, Impact, MetricHistory } from '../api/types'
 import { useAuth } from '../hooks/useAuth'
 import { useMetrics } from '../hooks/useMetrics'
 import { citationLabel, formatDelta, formatMetric } from '../utils/format'
@@ -31,6 +31,18 @@ interface Props {
   onFeedbackChange?: () => void
   onDrilldown?: () => void
   history?: MetricHistory
+}
+
+function ImpactLine({ impact }: { impact: Impact }) {
+  const bits: string[] = []
+  if (impact.amount_inr) bits.push(`Worth ${impact.amount_inr} ${impact.label}`)
+  if (impact.per_day_inr) bits.push(`${impact.per_day_inr} per day`)
+  if (impact.deadline) bits.push(`by ${impact.deadline}`)
+  return (
+    <p className="impact-line" title={[impact.basis, impact.deadline_basis && `Deadline: ${impact.deadline_basis}`].filter(Boolean).join(' ')}>
+      {bits.join(' · ')}
+    </p>
+  )
 }
 
 export function InsightCard({ item, feedback, onFeedbackChange, onDrilldown, history }: Props) {
@@ -87,6 +99,7 @@ export function InsightCard({ item, feedback, onFeedbackChange, onDrilldown, his
           <div className="action-box">
             <div className="field-label">Recommended action</div>
             <p>{item.action}</p>
+            {item.score_decomp?.impact && <ImpactLine impact={item.score_decomp.impact} />}
           </div>
         )}
       </div>
