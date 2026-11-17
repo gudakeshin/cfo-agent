@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta
 
 import pytest
@@ -281,8 +282,13 @@ def test_ops_alert_view(db_session, sent):
     assert body["backup"]["enabled"] is False
 
 
+# The SQLite backup path is tested here; PostgreSQL backups use pg_dump (see DEPLOYMENT.md).
+sqlite_only = pytest.mark.skipif(bool(os.environ.get("TEST_DATABASE_URL")), reason="exercises the SQLite backup path")
+
+
 # ── backups ─────────────────────────────────────────────────────────────────
 
+@sqlite_only
 def test_backup_is_taken_checked_and_pruned(db_session, tmp_path):
     db_session.add(Digest(week="2026-W40", weighting_version_id=_wv(db_session).id, headline="kept"))
     db_session.commit()
@@ -299,6 +305,7 @@ def test_backup_is_taken_checked_and_pruned(db_session, tmp_path):
     assert sqlite3.connect(left[-1]).execute("SELECT headline FROM digests").fetchone() == ("kept",)
 
 
+@sqlite_only
 def test_a_bad_backup_is_caught(db_session, tmp_path):
     good = backup.backup_current_tenant(tmp_path)
     garbage = tmp_path / "broken.sqlite"
@@ -320,6 +327,7 @@ def test_backup_freshness_feeds_the_watchdog(db_session, tmp_path, monkeypatch):
     assert "watchdog:backup_stale" not in watchdog.run_checks(db_session, datetime.utcnow())
 
 
+@sqlite_only
 def test_backup_runs_as_a_queued_job(db_session, tmp_path, monkeypatch):
     from cfo_agent import jobqueue
 
