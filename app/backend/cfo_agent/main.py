@@ -269,6 +269,22 @@ def health():
     return {"ok": True}
 
 
+@app.get("/metrics", include_in_schema=False)
+def prometheus_metrics(request: Request):
+    """Prometheus scrape endpoint; 404 unless METRICS_TOKEN is set, 401 without the bearer token."""
+    from fastapi.responses import PlainTextResponse
+
+    from cfo_agent.metrics import authorized, render
+    from cfo_agent.settings import global_settings
+
+    token = global_settings().metrics_token
+    if not token:
+        return PlainTextResponse("Not found", status_code=404)
+    if not authorized(request.headers.get("authorization"), token):
+        return PlainTextResponse("Unauthorized", status_code=401, headers={"WWW-Authenticate": "Bearer"})
+    return PlainTextResponse(render(), media_type="text/plain; version=0.0.4")
+
+
 # Registered last so it is the outermost middleware: audit, auth and request-ID
 # middleware all run inside the tenant's context.
 @app.middleware("http")
@@ -276,8 +292,8 @@ async def route_tenant(request, call_next):
     """Multi-tenant mode: pick the tenant (its database) from the Host header."""
     from cfo_agent.tenancy import is_multi_tenant, tenant_context, tenant_for_host
 
-    if not is_multi_tenant():
-        return await call_next(request)
+    if not is_multi_tenant() or request.url.path == "/metrics":
+        return await call_next(request)  # /metrics covers every tenant and is not tied to a host
     tenant = tenant_for_host(request.headers.get("host"))
     if tenant is None:
         from fastapi.responses import JSONResponse

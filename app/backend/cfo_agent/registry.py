@@ -91,6 +91,7 @@ OVERRIDABLE = {
     "news_model": _text,
     "max_llm_cost_usd_per_run": _non_negative_float,  # 0 = no model calls, deterministic text only
     "max_llm_calls_per_run": _non_negative_int,
+    "monthly_llm_budget_usd": _non_negative_float,  # 0 = no monthly ceiling
     "data_mode": _one_of("replay", "live"),
     "auth_mode": _one_of("off", "local", "oidc"),
     "oidc_issuer": _text,

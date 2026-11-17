@@ -323,6 +323,21 @@ def start_scheduler() -> BackgroundScheduler:
         leased("consolidation", jh.enqueue_consolidation if queued else job_consolidation_debounce),
         "interval", minutes=2, id="consolidation",
     )
+    # Watchdog: cheap checks that raise operator alerts; runs here, not through the queue,
+    # so it still works (and says so) when the queue is the thing that is broken.
+    from cfo_agent.watchdog import watchdog_job
+
+    sched.add_job(
+        leased("watchdog", watchdog_job),
+        CronTrigger(**_parse_cron(settings.watchdog_cron), timezone=tz), id="watchdog",
+    )
+    if settings.backup_dir:
+        from cfo_agent.backup import backup_job
+
+        sched.add_job(
+            leased("backup", jh.enqueue_backup if queued else backup_job),
+            CronTrigger(**_parse_cron(settings.backup_cron), timezone=tz), id="backup",
+        )
     # News refresh — only when scheduler is started (never in tests)
     news_cron = getattr(settings, "news_cron", "30 7 * * *")
     try:

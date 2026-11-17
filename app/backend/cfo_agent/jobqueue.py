@@ -154,9 +154,22 @@ def fail(job_id: int, error: str, *, retryable: bool = True, backoff: bool = Tru
         else:
             job.status, job.finished_at = "dead", _now()
         s.commit()
-        return job.status
+        status, kind, attempts, err = job.status, job.kind, job.attempts, job.last_error
     finally:
         s.close()
+    if status == "dead":
+        _alert_dead(kind, attempts, err)  # straight away, not at the next watchdog pass
+    return status
+
+
+def _alert_dead(kind: str, attempts: int, error: str) -> None:
+    try:
+        from cfo_agent.ops_alerts import raise_alert
+
+        raise_alert(f"watchdog:job_dead:{kind}", "critical" if kind == "digest" else "warn",
+                    f"Background job '{kind}' failed after {attempts} attempt(s)", f"Last error: {error[:400]}")
+    except Exception:  # noqa: BLE001 — alerting must never break the queue
+        logger.exception("Could not raise the dead-job alert")
 
 
 def reap_stale(stale_after_s: float) -> int:

@@ -89,6 +89,13 @@ def handle_connector_sync(payload: dict, ctx: dict):
     return {"run_id": scheduled_connector_sync(cid)}
 
 
+@job_handler("backup")
+def handle_backup(payload: dict, ctx: dict):
+    from cfo_agent.backup import backup_job
+
+    return {"backup": backup_job()}
+
+
 # ── enqueuers: what the cron triggers call ───────────────────────────────────
 # Cheap and non-blocking, so a slow tenant never delays another tenant's schedule.
 
@@ -110,3 +117,7 @@ def enqueue_news() -> None:
 
 def enqueue_connector_sync(connector_id: str) -> None:
     enqueue("connector_sync", {"connector_id": connector_id}, dedupe_key=f"connector:{connector_id}", max_attempts=2)
+
+
+def enqueue_backup() -> None:
+    enqueue("backup", {}, dedupe_key="backup", max_attempts=2)

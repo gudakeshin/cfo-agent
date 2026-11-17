@@ -303,6 +303,43 @@ behaviour.)
   exceeds an hour stops being heartbeated and is retried by another worker, but its thread cannot be
   killed and is abandoned until the process restarts.
 
+## Failure alerts, monitoring and backups
+
+**Alerts.** A watchdog runs every 5 minutes per tenant (`WATCHDOG_CRON`) and tells a person when something
+fails quietly. Set a channel (with none, alerts are only logged and shown at `GET /api/ops/alerts`):
+
+- `ALERT_WEBHOOK_URL`: a Slack or Microsoft Teams incoming webhook (may be a secret reference,
+  `env:NAME` or `file:/path`).
+- `ALERT_EMAIL_TO`: comma-separated addresses; uses the app's SMTP or Resend settings.
+
+The channel is the platform operator's and shared by all clients, so each message names the tenant and
+carries only the condition and an error summary, never client figures. An alert fires once, repeats every
+`ALERT_REPEAT_HOURS` (12) while the condition lasts, escalates at once from warning to critical, and sends a
+"resolved" message when it clears (`ALERT_NOTIFY_RESOLVED`).
+
+It watches: a digest run that failed or had no data; no weekly digest for 8 days (`DATA_MODE=live` only); a
+job that ran out of retries (alerted at once); jobs waiting with no worker running; a scheduler that has
+stopped; finance data that stopped updating (`ALERT_DATA_STALE_DAYS`, live mode); connectors in error; the
+monthly AI budget at 80% and 100%; and a missing or old backup.
+
+**Monthly AI budget.** `MONTHLY_LLM_BUDGET_USD` (0 = none; per tenant with
+`python -m cfo_agent.registry set acme --set monthly_llm_budget_usd=50`) caps each tenant's AI spend per
+calendar month. A digest run is limited to what is left and falls back to deterministic text when nothing is;
+chat and Ask say the budget is used instead of calling the model. Metered: digests, chat, Ask and meeting
+briefs (not news refresh or memory consolidation). `GET /api/ops/alerts` shows spend against the ceiling.
+
+**Metrics.** Set `METRICS_TOKEN` to enable Prometheus scraping at `/metrics` (`Authorization: Bearer <token>`;
+404 when unset). Per tenant: job counts by status, workers alive, digest age, failed runs, AI spend and
+budget, open alerts, backup age. Scrape an internal address; the endpoint covers every tenant.
+
+**Backups.** Set `BACKUP_DIR` (put it on an encrypted volume) and each tenant is backed up daily
+(`BACKUP_CRON`, default 02:30; newest `BACKUP_KEEP` = 14 kept) as `BACKUP_DIR/<tenant>/cfo-<time>.sqlite|.dump`
+with a checksum note, mode 0600. A backup counts only after it passes a check: SQLite is restored to a scratch
+copy, opened, integrity-checked and compared with the live row counts; PostgreSQL (`pg_dump` and `pg_restore`
+must be installed on the worker) must be listable and hold the core tables. A failed backup is deleted and
+alerts. By hand: `python -m cfo_agent.backup run | list | verify FILE`. For PostgreSQL, also restore a dump
+into a scratch database from time to time: only that proves the data comes back.
+
 ## Product features that need set-up
 
 - **Industry templates** (KRA framework page): manufacturing (default), FMCG, NBFC. Loading one fills the

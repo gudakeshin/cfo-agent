@@ -76,7 +76,23 @@ def budget_for_items(max_items: int) -> LlmBudget:
     """Per-run budget sized to the work: connect + (synth + repair) per item + headline."""
     settings = get_settings()
     calls = settings.max_llm_calls_per_run or (1 + 2 * max(0, max_items) + 1)
-    return LlmBudget(max_calls=calls, max_cost_usd=settings.max_llm_cost_usd_per_run)
+    cap = settings.max_llm_cost_usd_per_run
+    # The tenant's monthly ceiling, if any, caps the run to what is left of the month;
+    # at zero the run falls back to deterministic text (the same path as a zero per-run cap).
+    try:
+        from cfo_agent.budgetmeter import remaining_usd
+        from cfo_agent.db import get_session
+
+        s = get_session()
+        try:
+            left = remaining_usd(s)
+        finally:
+            s.close()
+        if left is not None:
+            cap = min(cap, left)
+    except Exception:  # noqa: BLE001 — metering must never stop a digest
+        pass
+    return LlmBudget(max_calls=calls, max_cost_usd=cap)
 
 
 def _pii_map():

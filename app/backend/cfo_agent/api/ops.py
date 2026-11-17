@@ -122,3 +122,30 @@ def retry_job(job_id: int):
     if not jobqueue.retry_dead(job_id):
         raise HTTPException(409, "Only a dead job with no active twin can be retried")
     return {"job_id": job_id, "status": "queued"}
+
+
+@router.get("/ops/alerts")
+def ops_alerts():
+    """Open operator alerts, this month's AI spend against its ceiling, and backup freshness."""
+    from cfo_agent import backup
+    from cfo_agent.budgetmeter import monthly_budget_usd, spend_this_month
+    from cfo_agent.ops_alerts import open_alerts
+    from cfo_agent.settings import get_settings
+
+    session = get_session()
+    try:
+        spend = spend_this_month(session)
+    finally:
+        session.close()
+    s = get_settings()
+    budget = monthly_budget_usd()
+    return {
+        "alerts": [
+            {"key": a.key, "severity": a.severity, "title": a.title, "detail": a.detail,
+             "first_seen_at": a.first_seen_at, "last_seen_at": a.last_seen_at, "notify_count": a.notify_count}
+            for a in open_alerts()
+        ],
+        "channels": {"webhook": bool(s.alert_webhook_url), "email": bool(s.alert_email_to.strip())},
+        "ai_budget": {"monthly_usd": budget or None, "spent_usd": spend, "used_pct": round(100 * spend["total"] / budget, 1) if budget else None},
+        "backup": {"enabled": bool(s.backup_dir), "last_verified_hours_ago": backup.last_backup_age_hours()},
+    }

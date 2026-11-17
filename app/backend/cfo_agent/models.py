@@ -704,6 +704,24 @@ class Job(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class OpsAlert(Base):
+    """An operator alert and its state, so a condition alerts once, repeats on a timer while it
+    lasts, and says so when it clears (see ops_alerts.py)."""
+
+    __tablename__ = "ops_alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(96), index=True)
+    severity: Mapped[str] = mapped_column(String(12))  # warn | critical
+    title: Mapped[str] = mapped_column(String(256))
+    detail: Mapped[str] = mapped_column(Text, default="")
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    notify_count: Mapped[int] = mapped_column(Integer, default=0)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class JobWorker(Base):
     """A running job executor, for the ops view ("is anything there to run my jobs?")."""
 

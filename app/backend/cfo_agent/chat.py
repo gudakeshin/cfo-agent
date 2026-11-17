@@ -124,7 +124,15 @@ def converse(
     limit. Returns the final text (not yet gated) and the budget used."""
     tools = DATA_TOOLS + CHAT_TOOLS
     settings = get_settings()
-    budget = llm.LlmBudget(max_calls=settings.max_tool_rounds + 1)
+    from cfo_agent.budgetmeter import remaining_usd
+
+    left = remaining_usd(session)
+    if left is not None and left <= 0:
+        msg = ("This workspace has used its AI budget for the month, so I cannot answer new questions until it "
+               "resets or an administrator raises it. The briefing and the data pages are unaffected.")
+        emit("delta", {"text": msg})
+        return msg, llm.LlmBudget(max_calls=0)
+    budget = llm.LlmBudget(max_calls=settings.max_tool_rounds + 1, max_cost_usd=left)
 
     final_text = ""
     for _round in range(settings.max_tool_rounds + 1):

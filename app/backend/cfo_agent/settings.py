@@ -66,6 +66,21 @@ class Settings(BaseSettings):
     job_max_per_tenant: int = Field(default=2, ge=1, alias="JOB_MAX_PER_TENANT")
     job_poll_s: float = Field(default=2.0, alias="JOB_POLL_S")
     job_stale_after_s: float = Field(default=180.0, alias="JOB_STALE_AFTER_S")
+    # Operator alerts (see ops_alerts.py). Nothing is sent unless a channel is set.
+    alert_webhook_url: str | None = Field(default=None, alias="ALERT_WEBHOOK_URL")  # Slack / Teams incoming webhook
+    alert_email_to: str = Field(default="", alias="ALERT_EMAIL_TO")  # comma-separated; needs SMTP or Resend
+    alert_repeat_hours: float = Field(default=12.0, alias="ALERT_REPEAT_HOURS")
+    alert_notify_resolved: bool = Field(default=True, alias="ALERT_NOTIFY_RESOLVED")
+    alert_data_stale_days: int = Field(default=3, alias="ALERT_DATA_STALE_DAYS")
+    watchdog_cron: str = Field(default="*/5 * * * *", alias="WATCHDOG_CRON")
+    # AI spend ceiling per calendar month for a tenant, in USD (0 = no ceiling). Overridable per tenant.
+    monthly_llm_budget_usd: float = Field(default=0.0, ge=0, alias="MONTHLY_LLM_BUDGET_USD")
+    # Prometheus scrape endpoint /metrics: off unless a bearer token is set.
+    metrics_token: str | None = Field(default=None, alias="METRICS_TOKEN")
+    # Scheduled backups (see backup.py): off unless BACKUP_DIR is set.
+    backup_dir: str | None = Field(default=None, alias="BACKUP_DIR")
+    backup_keep: int = Field(default=14, ge=1, alias="BACKUP_KEEP")
+    backup_cron: str = Field(default="30 2 * * *", alias="BACKUP_CRON")
     # Tenant registry: a control database listing the clients (see cfo_agent/registry.py).
     # Unset = single tenant, or the TENANTS_FILE below. Set = multi-tenant, even when empty.
     control_database_url: str | None = Field(default=None, alias="CONTROL_DATABASE_URL")
