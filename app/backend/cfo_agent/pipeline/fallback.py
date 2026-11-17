@@ -73,6 +73,8 @@ def _val(metric_id: str | None, v: float | None) -> str:
         return f"{'-' if v < 0 else ''}₹{_fmt(abs(v))} Cr"
     if unit == "%":
         return f"{n}%"
+    if unit == "x":
+        return f"{n}x"
     return f"{n} {unit}"
 
 

@@ -16,7 +16,9 @@ from cfo_agent.models import (
     ErpCreditNote,
     ErpEntity,
     ErpFxRate,
+    ErpDebtBalance,
     ErpGlEntry,
+    ErpInventoryBalance,
     ErpCovenant,
     ErpCustomer,
     ErpExpense,
@@ -29,6 +31,8 @@ from cfo_agent.models import (
 )
 
 ERP_TABLES = [
+    ErpDebtBalance,
+    ErpInventoryBalance,
     ErpCreditNote,
     ErpGlEntry,
     ErpReceipt,

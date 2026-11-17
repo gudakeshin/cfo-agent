@@ -18,7 +18,10 @@ from cfo_agent.models import (
     ErpCashDaily,
     ErpCreditNote,
     ErpCustomer,
+    ErpDebtBalance,
     ErpEntity,
+    ErpFxRate,
+    ErpInventoryBalance,
     ErpGlEntry,
     ErpExpense,
     ErpGstEvent,
@@ -30,6 +33,7 @@ from cfo_agent.models import (
     Signal,
 )
 from cfo_agent.timeutil import (
+    PAISE_PER_CRORE,
     iso_week_id,
     paise_to_crore,
     week_monday,
@@ -646,6 +650,284 @@ def compute_board_pack(session: Session, week: str) -> MetricResult:
     )
 
 
+# ── working-capital cycle, leverage and foreign-currency exposure ────────────
+# These need feeds the base model did not carry (inventory, debt, a ledger with
+# three closed months, foreign-currency invoices). Each metric is unavailable, never
+# estimated, until its feed is there.
+
+STALE_BALANCE_DAYS = 45  # a balance older than this no longer describes "now"
+
+
+def _latest_balances(session: Session, model, key_cols: list, end: date):
+    """Latest snapshot on or before `end` for every key (category, facility…), in scope."""
+    from sqlalchemy import and_
+
+    sub = (
+        session.query(*key_cols, func.max(model.as_of_date).label("d"))
+        .filter(model.as_of_date <= end, *_entity_conds(session, model))
+        .group_by(*key_cols)
+        .subquery()
+    )
+    cond = and_(model.as_of_date == sub.c.d, *[c == sub.c[c.key] for c in key_cols])
+    rows = session.query(model).join(sub, cond).order_by(model.id).all()
+    # Entity is part of the identity of a balance when several entities report the same category.
+    rows = [r for r in rows if (end - r.as_of_date).days <= STALE_BALANCE_DAYS]
+    return rows
+
+
+def _closed_months(session: Session, end: date, n: int = 3) -> list[date]:
+    """Period-ends of the last `n` closed ledger periods (closed = 10 days after period end)."""
+    pes = [
+        d
+        for (d,) in session.query(ErpGlEntry.period_end)
+        .filter(ErpGlEntry.period_end <= end - timedelta(days=10), *_entity_conds(session, ErpGlEntry))
+        .distinct()
+        .order_by(ErpGlEntry.period_end.desc())
+        .limit(n)
+    ]
+    return pes if len(pes) == n else []
+
+
+def _days_in_periods(period_ends: list[date]) -> int:
+    from calendar import monthrange
+
+    return sum(monthrange(d.year, d.month)[1] for d in period_ends)
+
+
+def _gl_totals(session: Session, period_ends: list[date]) -> dict[str, int]:
+    """Signed ledger totals by account type over the given periods (debits positive)."""
+    rows = (
+        session.query(ErpGlEntry.account_type, func.coalesce(func.sum(ErpGlEntry.amount_paise), 0))
+        .filter(ErpGlEntry.period_end.in_(period_ends), *_entity_conds(session, ErpGlEntry))
+        .group_by(ErpGlEntry.account_type)
+        .all()
+    )
+    return {t: int(v) for t, v in rows}
+
+
+def _ebitda_paise(totals: dict[str, int]) -> int:
+    """Revenue (a credit, so negative) less cost of goods and operating expense."""
+    return -totals.get("revenue", 0) - totals.get("cogs", 0) - totals.get("opex", 0)
+
+
+def _gl_lineage(session: Session, period_ends: list[date], types: tuple[str, ...], limit: int = 12) -> list[str]:
+    rows = (
+        session.query(ErpGlEntry)
+        .filter(ErpGlEntry.period_end.in_(period_ends), ErpGlEntry.account_type.in_(types),
+                *_entity_conds(session, ErpGlEntry))
+        .order_by(func.abs(ErpGlEntry.amount_paise).desc())
+        .limit(limit)
+        .all()
+    )
+    return [_cid("erp_gl_entries", r.business_key) for r in rows]
+
+
+@register("inventory_cr")
+def compute_inventory(session: Session, week: str) -> MetricResult:
+    end = as_of_end(week)
+    rows = _latest_balances(session, ErpInventoryBalance, [ErpInventoryBalance.category, ErpInventoryBalance.entity], end)
+    if not rows:
+        return unavailable("inventory_cr", "Cr", "no recent inventory balance")
+    total = sum(r.value_paise for r in rows)
+    return MetricResult("inventory_cr", round(paise_to_crore(total), 2),
+                        lineage=[_cid("erp_inventory", r.business_key) for r in rows], unit="Cr")
+
+
+@register("dio_days")
+def compute_dio(session: Session, week: str) -> MetricResult:
+    """Days of inventory ≈ inventory ÷ daily cost of goods sold (last three closed ledger months)."""
+    end = as_of_end(week)
+    inv = compute_inventory(session, week)
+    months = _closed_months(session, end)
+    if not inv.available:
+        return unavailable("dio_days", "days", "no recent inventory balance")
+    if not months:
+        return unavailable("dio_days", "days", "needs three closed months in the general ledger")
+    cogs = _gl_totals(session, months).get("cogs", 0)
+    if cogs <= 0:
+        return unavailable("dio_days", "days", "no cost of goods sold in the ledger")
+    daily = cogs / _days_in_periods(months)
+    inv_paise = inv.value * PAISE_PER_CRORE
+    return MetricResult("dio_days", round(inv_paise / daily, 1),
+                        lineage=inv.lineage + _gl_lineage(session, months, ("cogs",)), unit="days")
+
+
+@register("cash_conversion_cycle_days")
+def compute_ccc(session: Session, week: str) -> MetricResult:
+    """Days from paying suppliers to collecting from customers: DSO + days of inventory − DPO."""
+    parts = [compute_dso(session, week), compute_dio(session, week), compute_dpo(session, week)]
+    if not all(p.available for p in parts):
+        return unavailable("cash_conversion_cycle_days", "days", "needs DSO, days of inventory and DPO")
+    dso, dio, dpo = parts
+    return MetricResult(
+        "cash_conversion_cycle_days",
+        round(dso.value + dio.value - dpo.value, 1),
+        lineage=dso.lineage[:14] + dio.lineage[:14] + dpo.lineage[:14],
+        unit="days",
+    )
+
+
+def _debt_rows(session: Session, end: date):
+    return _latest_balances(session, ErpDebtBalance, [ErpDebtBalance.facility, ErpDebtBalance.entity], end)
+
+
+@register("net_debt_cr")
+def compute_net_debt(session: Session, week: str) -> MetricResult:
+    end = as_of_end(week)
+    debt = _debt_rows(session, end)
+    cash = cash_positions(session, end)
+    if not debt:
+        return unavailable("net_debt_cr", "Cr", "no recent debt balances")
+    if not cash:
+        return unavailable("net_debt_cr", "Cr", "no cash balance to net against")
+    net = sum(d.outstanding_paise for d in debt) - sum(c.balance_paise for c, _ in cash)
+    return MetricResult(
+        "net_debt_cr", round(paise_to_crore(net), 2),
+        lineage=[_cid("erp_debt", d.business_key) for d in debt] + [_cid("erp_cash_daily", c.business_key) for c, _ in cash],
+        unit="Cr",
+    )
+
+
+@register("net_debt_to_ebitda_x")
+def compute_leverage(session: Session, week: str) -> MetricResult:
+    """Net debt ÷ EBITDA from the last three closed months, annualised (×4)."""
+    end = as_of_end(week)
+    nd = compute_net_debt(session, week)
+    months = _closed_months(session, end)
+    if not nd.available:
+        return unavailable("net_debt_to_ebitda_x", "x", "needs debt and cash balances")
+    if not months:
+        return unavailable("net_debt_to_ebitda_x", "x", "needs three closed months in the general ledger")
+    ebitda = _ebitda_paise(_gl_totals(session, months)) * 4
+    if ebitda <= 0:
+        return unavailable("net_debt_to_ebitda_x", "x", "EBITDA is not positive, so the ratio is undefined")
+    return MetricResult("net_debt_to_ebitda_x", round(nd.value * PAISE_PER_CRORE / ebitda, 2),
+                        lineage=nd.lineage + _gl_lineage(session, months, ("revenue", "cogs", "opex")), unit="x")
+
+
+@register("interest_cover_x")
+def compute_interest_cover(session: Session, week: str) -> MetricResult:
+    """EBITDA ÷ finance cost over the last three closed ledger months."""
+    end = as_of_end(week)
+    months = _closed_months(session, end)
+    if not months:
+        return unavailable("interest_cover_x", "x", "needs three closed months in the general ledger")
+    totals = _gl_totals(session, months)
+    fin = totals.get("finance_cost", 0)
+    if fin <= 0:
+        return unavailable("interest_cover_x", "x", "no finance cost in the ledger")
+    return MetricResult("interest_cover_x", round(_ebitda_paise(totals) / fin, 2),
+                        lineage=_gl_lineage(session, months, ("finance_cost", "revenue", "cogs", "opex")), unit="x")
+
+
+@register("debt_service_cover_x")
+def compute_dscr(session: Session, week: str) -> MetricResult:
+    """EBITDA ÷ (finance cost + principal falling due), over a quarter: the last three closed
+    months against the principal scheduled for the next 90 days."""
+    end = as_of_end(week)
+    debt = _debt_rows(session, end)
+    months = _closed_months(session, end)
+    if not debt:
+        return unavailable("debt_service_cover_x", "x", "no recent debt balances")
+    if not months:
+        return unavailable("debt_service_cover_x", "x", "needs three closed months in the general ledger")
+    totals = _gl_totals(session, months)
+    service = totals.get("finance_cost", 0) + sum(d.principal_due_90d_paise for d in debt)
+    if service <= 0:
+        return unavailable("debt_service_cover_x", "x", "no debt service due")
+    return MetricResult(
+        "debt_service_cover_x", round(_ebitda_paise(totals) / service, 2),
+        lineage=[_cid("erp_debt", d.business_key) for d in debt] + _gl_lineage(session, months, ("finance_cost", "revenue", "cogs", "opex")),
+        unit="x",
+    )
+
+
+def _fx_open(session: Session, end: date):
+    rec = [(i, r) for i, r in open_receivables(session, end) if (i.currency or "INR") != "INR"]
+    pay = [(p, r) for p, r in open_payables(session, end) if (p.currency or "INR") != "INR"]
+    return rec, pay
+
+
+def _has_foreign_invoices(session: Session, end: date) -> bool:
+    for model in (ErpSalesInvoice, ErpPurchaseInvoice):
+        if session.query(model.id).filter(model.currency != "INR", model.invoice_date <= end,
+                                          *_entity_conds(session, model)).first():
+            return True
+    return False
+
+
+@register("fx_receivables_cr")
+def compute_fx_receivables(session: Session, week: str) -> MetricResult:
+    end = as_of_end(week)
+    if not _has_foreign_invoices(session, end):
+        return unavailable("fx_receivables_cr", "Cr", "no foreign-currency invoices")
+    rec, _ = _fx_open(session, end)
+    rec.sort(key=lambda x: -x[1])
+    return MetricResult("fx_receivables_cr", round(paise_to_crore(sum(r for _, r in rec)), 2),
+                        lineage=[_cid("erp_sales_invoices", i.business_key) for i, _ in rec[:40]], unit="Cr")
+
+
+@register("fx_payables_cr")
+def compute_fx_payables(session: Session, week: str) -> MetricResult:
+    end = as_of_end(week)
+    if not _has_foreign_invoices(session, end):
+        return unavailable("fx_payables_cr", "Cr", "no foreign-currency invoices")
+    _, pay = _fx_open(session, end)
+    pay.sort(key=lambda x: -x[1])
+    return MetricResult("fx_payables_cr", round(paise_to_crore(sum(r for _, r in pay)), 2),
+                        lineage=[_cid("erp_purchase_invoices", p.business_key) for p, _ in pay[:40]], unit="Cr")
+
+
+@register("net_fx_exposure_cr")
+def compute_net_fx(session: Session, week: str) -> MetricResult:
+    """Open foreign-currency receivables less payables, in rupees: positive means the
+    business gains when the rupee weakens and loses when it strengthens."""
+    end = as_of_end(week)
+    if not _has_foreign_invoices(session, end):
+        return unavailable("net_fx_exposure_cr", "Cr", "no foreign-currency invoices")
+    rec, pay = _fx_open(session, end)
+    net = sum(r for _, r in rec) - sum(r for _, r in pay)
+    top = sorted(rec, key=lambda x: -x[1])[:20]
+    toppay = sorted(pay, key=lambda x: -x[1])[:20]
+    return MetricResult(
+        "net_fx_exposure_cr", round(paise_to_crore(net), 2),
+        lineage=[_cid("erp_sales_invoices", i.business_key) for i, _ in top]
+        + [_cid("erp_purchase_invoices", p.business_key) for p, _ in toppay],
+        unit="Cr",
+    )
+
+
+@register("largest_fx_move_pct")
+def compute_fx_move(session: Session, week: str) -> MetricResult:
+    """Largest four-week move in the rupee rate of any currency the business has open
+    invoices in (positive = the foreign currency strengthened against the rupee)."""
+    end = as_of_end(week)
+    rec, pay = _fx_open(session, end)
+    ccys = {i.currency for i, _ in rec} | {p.currency for p, _ in pay}
+    if not ccys:
+        return unavailable("largest_fx_move_pct", "%", "no open foreign-currency invoices")
+
+    def rate_on(ccy: str, day: date):
+        return (
+            session.query(ErpFxRate)
+            .filter(ErpFxRate.currency == ccy, ErpFxRate.rate_date <= day)
+            .order_by(ErpFxRate.rate_date.desc())
+            .first()
+        )
+
+    best: tuple[float, list[str]] | None = None
+    for ccy in sorted(ccys):
+        now, then = rate_on(ccy, end), rate_on(ccy, end - timedelta(days=28))
+        if not now or not then or then.rate_to_inr <= 0 or now.id == then.id:
+            continue
+        move = 100.0 * (now.rate_to_inr - then.rate_to_inr) / then.rate_to_inr
+        if best is None or abs(move) > abs(best[0]):
+            best = (move, [_cid("erp_fx_rates", now.business_key), _cid("erp_fx_rates", then.business_key)])
+    if best is None:
+        return unavailable("largest_fx_move_pct", "%", "no exchange-rate history for the open currencies")
+    return MetricResult("largest_fx_move_pct", round(best[0], 2), lineage=best[1], unit="%")
+
+
 COMPUTE_FNS: dict[str, Callable[[Session, str], MetricResult]] = {
     "dso_days": compute_dso,
     "dpo_days": compute_dpo,
@@ -665,6 +947,17 @@ COMPUTE_FNS: dict[str, Callable[[Session, str], MetricResult]] = {
     "segment_revenue_growth_pct": compute_segment_growth,
     "revenue_concentration_pct": compute_rev_concentration,
     "board_pack_readiness_score": compute_board_pack,
+    "inventory_cr": compute_inventory,
+    "dio_days": compute_dio,
+    "cash_conversion_cycle_days": compute_ccc,
+    "net_debt_cr": compute_net_debt,
+    "net_debt_to_ebitda_x": compute_leverage,
+    "interest_cover_x": compute_interest_cover,
+    "debt_service_cover_x": compute_dscr,
+    "fx_receivables_cr": compute_fx_receivables,
+    "fx_payables_cr": compute_fx_payables,
+    "net_fx_exposure_cr": compute_net_fx,
+    "largest_fx_move_pct": compute_fx_move,
 }
 
 
@@ -707,6 +1000,17 @@ ADVERSE_DIRECTION: dict[str, str | None] = {
     "segment_revenue_growth_pct": "down",
     "revenue_concentration_pct": "up",
     "board_pack_readiness_score": "down",
+    "inventory_cr": "up",
+    "dio_days": "up",
+    "cash_conversion_cycle_days": "up",
+    "net_debt_cr": "up",
+    "net_debt_to_ebitda_x": "up",
+    "interest_cover_x": "down",
+    "debt_service_cover_x": "down",
+    "fx_receivables_cr": None,
+    "fx_payables_cr": None,
+    "net_fx_exposure_cr": None,
+    "largest_fx_move_pct": None,
 }
 FAVOURABLE_MOVE_FACTOR = 0.5
 
@@ -730,6 +1034,17 @@ METRIC_META: dict[str, dict[str, str]] = {
     "segment_revenue_growth_pct": {"label": "Segment revenue growth", "unit": "%"},
     "revenue_concentration_pct": {"label": "Top-segment revenue share", "unit": "%"},
     "board_pack_readiness_score": {"label": "Board pack readiness", "unit": "score"},
+    "inventory_cr": {"label": "Inventory", "unit": "₹ Cr"},
+    "dio_days": {"label": "Days of inventory", "unit": "days"},
+    "cash_conversion_cycle_days": {"label": "Cash conversion cycle", "unit": "days"},
+    "net_debt_cr": {"label": "Net debt", "unit": "₹ Cr"},
+    "net_debt_to_ebitda_x": {"label": "Net debt to EBITDA (annualised)", "unit": "x"},
+    "interest_cover_x": {"label": "Interest cover", "unit": "x"},
+    "debt_service_cover_x": {"label": "Debt-service cover", "unit": "x"},
+    "fx_receivables_cr": {"label": "Foreign-currency receivables", "unit": "₹ Cr"},
+    "fx_payables_cr": {"label": "Foreign-currency payables", "unit": "₹ Cr"},
+    "net_fx_exposure_cr": {"label": "Net foreign-currency exposure", "unit": "₹ Cr"},
+    "largest_fx_move_pct": {"label": "Largest exchange-rate move (4 weeks)", "unit": "%"},
 }
 
 

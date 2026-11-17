@@ -223,6 +223,37 @@ class ErpCreditNote(Base):
     fx_rate: Mapped[float] = mapped_column(Float, default=1.0)
 
 
+class ErpInventoryBalance(Base):
+    """Inventory on hand, one row per category (raw materials, WIP, finished goods…) per
+    snapshot date. The latest row on or before a date is the balance as of that date."""
+
+    __tablename__ = "erp_inventory"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    as_of_date: Mapped[date] = mapped_column(Date, index=True)
+    category: Mapped[str] = mapped_column(String(64), default="total")
+    entity: Mapped[str] = mapped_column(String(32), default="MAIN", index=True)
+    value_paise: Mapped[int] = mapped_column(BigInteger)
+
+
+class ErpDebtBalance(Base):
+    """Borrowings by facility on a snapshot date. `principal_due_90d_paise` is the
+    scheduled principal falling due in the following 90 days (for debt-service cover)."""
+
+    __tablename__ = "erp_debt"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    as_of_date: Mapped[date] = mapped_column(Date, index=True)
+    facility: Mapped[str] = mapped_column(String(64), index=True)
+    lender: Mapped[str] = mapped_column(String(128), default="")
+    entity: Mapped[str] = mapped_column(String(32), default="MAIN", index=True)
+    outstanding_paise: Mapped[int] = mapped_column(BigInteger)
+    interest_rate_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    principal_due_90d_paise: Mapped[int] = mapped_column(BigInteger, default=0)
+
+
 class ErpGlEntry(Base):
     """General-ledger lines (trial-balance movements). amount_paise is signed:
     debit positive, credit negative. account_type drives declarative metrics."""

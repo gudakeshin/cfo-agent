@@ -13,7 +13,9 @@ from cfo_agent.models import (
     ErpCreditNote,
     ErpEntity,
     ErpFxRate,
+    ErpDebtBalance,
     ErpGlEntry,
+    ErpInventoryBalance,
     ErpPlanMetric,
     ErpCovenant,
     ErpCustomer,
@@ -41,6 +43,8 @@ TABLE_MODEL = {
     "erp_covenants": ErpCovenant,
     "erp_credit_notes": ErpCreditNote,
     "erp_gl_entries": ErpGlEntry,
+    "erp_inventory": ErpInventoryBalance,
+    "erp_debt": ErpDebtBalance,
     "erp_bank_accounts": ErpBankAccount,
     "erp_fx_rates": ErpFxRate,
     "erp_entities": ErpEntity,
@@ -154,6 +158,11 @@ def _summarize_erp(session: Session, table: str, row: Any) -> tuple[str, dict]:
     elif table == "erp_gl_entries":
         summary = (f"{row.business_key} · {row.account_code} {row.account_name} · "
                    f"{format_inr(row.amount_paise)} · posted {row.posting_date} for {row.period_end}")
+    elif table == "erp_inventory":
+        summary = f"{row.business_key} · {row.category} inventory {format_inr(row.value_paise)} · {row.as_of_date}"
+    elif table == "erp_debt":
+        summary = (f"{row.business_key} · {row.facility} ({row.lender}) outstanding "
+                   f"{format_inr(row.outstanding_paise)} at {row.interest_rate_pct:g}% · {row.as_of_date}")
     elif table == "erp_plan_metrics":
         summary = f"{row.business_key} · plan {row.metric_id} {row.value:g} · {row.week}"
     elif table == "erp_covenants":

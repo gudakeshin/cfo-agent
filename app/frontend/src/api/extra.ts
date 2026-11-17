@@ -75,6 +75,21 @@ export interface EventTypeOption {
   in_data: boolean
 }
 
+// ── statutory calendar ───────────────────────────────────────────────────────
+export interface StatutoryDeadline {
+  id: string
+  label: string
+  authority: string
+  due_date: string
+  days_away: number
+}
+
+export interface StatutoryCalendar {
+  as_of: string
+  note: string
+  deadlines: StatutoryDeadline[]
+}
+
 // ── period lens ──────────────────────────────────────────────────────────────
 export interface PeriodView {
   label: string
@@ -258,6 +273,10 @@ export const extra = {
   getShared: (token: string) => request<SharedDigest>(`/shared/${encodeURIComponent(token)}`),
 
   heatmap: (n = 13) => request<Heatmap>(`/insights/heatmap?n=${n}`),
+  statutory: (week?: string, days = 21) =>
+    request<StatutoryCalendar>(
+      `/statutory-calendar?days=${days}${week ? `&week=${encodeURIComponent(week)}` : ''}`,
+    ),
   periods: (week?: string) => request<PeriodLens>(`/periods${week ? `?week=${encodeURIComponent(week)}` : ''}`),
   scorecard: () => request<Scorecard>('/feedback/scorecard'),
   eventTypes: () => request<EventTypeOption[]>('/redlines/event-types'),

@@ -46,6 +46,35 @@ function OpenActions() {
   )
 }
 
+function ComingDeadlines({ week }: { week?: string }) {
+  const { data } = useQuery({
+    queryKey: ['statutory', week],
+    queryFn: () => extra.statutory(week),
+    enabled: Boolean(week),
+    staleTime: 60 * 60_000,
+  })
+  if (!data || !data.deadlines.length) return null
+  return (
+    <section className="panel actions-panel no-print" aria-label="Coming deadlines">
+      <div className="regulatory-watch-head">
+        <h3>Coming deadlines · next {data.deadlines.length}</h3>
+      </div>
+      <ul>
+        {data.deadlines.slice(0, 5).map((d) => (
+          <li key={d.id}>
+            <span className={d.days_away <= 3 ? 'error-text' : ''}>{d.label}</span>
+            <span className="meta">
+              {d.authority} · {new Date(d.due_date + 'T00:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
+              {d.days_away === 0 ? ' · today' : d.days_away === 1 ? ' · tomorrow' : ` · in ${d.days_away} days`}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="period-note">{data.note}</p>
+    </section>
+  )
+}
+
 function IntroCard() {
   const [hidden, setHidden] = useState(() => readPref(INTRO_KEY) === '1')
   if (hidden) return null
@@ -207,6 +236,7 @@ export function Briefing() {
       )}
 
       <OpenActions />
+      <ComingDeadlines week={briefing?.week} />
 
       {digest && <DataHealthBanner health={digest.data_health} />}
       {digest && <DigestItems digest={digest} />}

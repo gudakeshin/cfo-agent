@@ -37,7 +37,9 @@ from cfo_agent.models import (
     ErpCreditNote,
     ErpEntity,
     ErpFxRate,
+    ErpDebtBalance,
     ErpGlEntry,
+    ErpInventoryBalance,
     ErpPlanMetric,
     ErpCovenant,
     ErpCustomer,
@@ -328,6 +330,25 @@ SPECS: list[TableSpec] = [  # load order: masters before transactions
         Col("currency", "currency", parse_ccy, False, "INR"),
         Col("fx_rate", "fx_rate", parse_rate, False),
     ], fx=("posting_date", ["amount_paise"])),
+    TableSpec("inventory", ErpInventoryBalance, [
+        Col("business_key", "business_key", text(64), False),
+        Col("as_of_date", "as_of_date", parse_date),
+        Col("category", "category", text(64), False, "total"),
+        Col("value_inr", "value_paise", parse_inr_to_paise),
+        Col("entity", "entity", text(32), False, "MAIN"),
+    ], key_from=lambda r: (f"INV-{r['as_of_date'].isoformat()}-{r.get('category', 'total')}"
+                           + ("" if r.get("entity", "MAIN") == "MAIN" else f"-{r['entity']}"))),
+    TableSpec("debt", ErpDebtBalance, [
+        Col("business_key", "business_key", text(64), False),
+        Col("as_of_date", "as_of_date", parse_date),
+        Col("facility", "facility", text(64)),
+        Col("lender", "lender", text(128), False, ""),
+        Col("outstanding_inr", "outstanding_paise", parse_inr_to_paise),
+        Col("interest_rate_pct", "interest_rate_pct", parse_float, False, 0.0),
+        Col("principal_due_90d_inr", "principal_due_90d_paise", parse_inr_to_paise, False, 0),
+        Col("entity", "entity", text(32), False, "MAIN"),
+    ], key_from=lambda r: (f"DEBT-{r['as_of_date'].isoformat()}-{r['facility']}"
+                           + ("" if r.get("entity", "MAIN") == "MAIN" else f"-{r['entity']}"))),
     TableSpec("plan_metrics", ErpPlanMetric, [
         Col("business_key", "business_key", text(64), False),
         Col("week", "week", text(16)),

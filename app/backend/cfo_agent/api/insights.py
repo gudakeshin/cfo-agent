@@ -14,7 +14,9 @@ from sqlalchemy.orm import Session
 from cfo_agent.db import get_session
 from cfo_agent.models import (
     ErpCreditNote,
+    ErpDebtBalance,
     ErpGlEntry,
+    ErpInventoryBalance,
     ErpPlanMetric,
     MetricDefinition,
     Digest,
@@ -59,6 +61,8 @@ def _data_stamp(session: Session) -> tuple:
         session.query(func.count(ErpCashDaily.id)).scalar(),
         session.query(func.count(ErpCreditNote.id)).scalar(),
         session.query(func.max(ErpGlEntry.id)).scalar(),
+        session.query(func.max(ErpInventoryBalance.id)).scalar(),
+        session.query(func.max(ErpDebtBalance.id)).scalar(),
         session.query(func.max(ErpPlanMetric.id)).scalar(),
         session.query(func.max(MetricDefinition.id)).scalar(),
     )
@@ -172,6 +176,25 @@ def period_views(
         return {"week": week, "fiscal_year_start_month": fy, "metrics": out}
     finally:
         session.close()
+
+
+@router.get("/statutory-calendar")
+def statutory_calendar(week: str | None = None, days: int = Query(21, ge=1, le=60)):
+    """Statutory due dates coming up. In live mode the date is today; in replay mode it is
+    the Monday after the briefing week, so a replayed briefing shows deadlines of its own time."""
+    from cfo_agent.settings import get_settings
+    from cfo_agent.statutory import upcoming
+    from cfo_agent.timeutil import today_ist
+
+    if get_settings().data_mode == "live" or not week:
+        today = today_ist()
+    else:
+        today = week_sunday(week) + timedelta(days=1)
+    return {
+        "as_of": today.isoformat(),
+        "note": "Standard due dates only: extensions and holidays are not applied, and filing status is not tracked.",
+        "deadlines": upcoming(today, days),
+    }
 
 
 # ── briefing ────────────────────────────────────────────────────────────────

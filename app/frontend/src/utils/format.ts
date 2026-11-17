@@ -26,6 +26,8 @@ export function formatMetric(value: number | null | undefined, unit: string): st
       return `${formatNumber(value, 1)} days`
     case 'count':
       return formatNumber(value, 0)
+    case 'x':
+      return `${formatNumber(value, 2)}x`
     default:
       return formatNumber(value)
   }
@@ -42,6 +44,8 @@ export function formatDelta(delta: number | null | undefined, unit: string): str
       return `${sign}${formatNumber(abs, 1)} pts`
     case 'days':
       return `${sign}${formatNumber(abs, 1)} days`
+    case 'x':
+      return `${sign}${formatNumber(abs, 2)}x`
     default:
       return `${sign}${formatNumber(abs)}`
   }

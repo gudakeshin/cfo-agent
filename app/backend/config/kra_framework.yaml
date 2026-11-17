@@ -16,7 +16,7 @@ faces:
       - id: STW-1
         name: Working capital integrity
         grounding: erp
-        metrics: [dso_days, dpo_days, cash_balance_cr, ar_overdue_pct]
+        metrics: [dso_days, dpo_days, cash_balance_cr, ar_overdue_pct, dio_days, cash_conversion_cycle_days, inventory_cr]
         concerns:
           - Receivables aging stretch masking collection risk
           - Payables stretch creating supplier concentration risk
@@ -24,7 +24,7 @@ faces:
       - id: STW-2
         name: Liquidity & covenant headroom
         grounding: erp
-        metrics: [cash_balance_cr, covenant_headroom_cr]
+        metrics: [cash_balance_cr, covenant_headroom_cr, net_debt_cr, interest_cover_x, debt_service_cover_x, net_debt_to_ebitda_x]
         concerns:
           - Cash below buffered covenant (early warning before raw breach)
           - Undrawn facility reliance masking structural squeeze
@@ -99,18 +99,18 @@ faces:
       - id: STR-3
         name: Capital structure optionality
         grounding: erp
-        metrics: [cash_balance_cr, free_cash_flow_cr]
+        metrics: [cash_balance_cr, free_cash_flow_cr, net_debt_cr, net_debt_to_ebitda_x]
         concerns:
           - Cash trap vs. deployment opportunity
           - Refinance window ahead of rate moves
       - id: STR-4
         name: Cross-border / FEMA readiness
-        grounding: none
-        metrics: []
+        grounding: erp
+        metrics: [net_fx_exposure_cr, fx_receivables_cr, fx_payables_cr, largest_fx_move_pct]
         concerns:
+          - Open foreign-currency receivables and payables, and the rupee's recent move against them
           - Outbound remittance approvals for acquisition consideration
-          - FEMA Form ODI / ECB documentation readiness
-        note: "No live feed in v1 — ERP alone cannot ground FEMA status"
+          - FEMA Form ODI / ECB documentation status is not in the ERP and is not tracked here
 
   catalyst:
     name: Catalyst

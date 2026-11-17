@@ -101,7 +101,7 @@ Point the reverse proxy at `127.0.0.1:8000` (change `API_BIND`/`API_PORT` if nee
 
 The app only reads these files; it has no write path into any client system.
 
-New templates: `entities`, `bank_accounts`, `fx_rates`, `credit_notes`, `gl_entries`, `plan_metrics`.
+New templates: `entities`, `bank_accounts`, `fx_rates`, `credit_notes`, `gl_entries`, `plan_metrics`, `inventory`, `debt`.
 
 - **Entities and intercompany.** Every transaction can carry an `entity` code (default `MAIN`).
   Metrics are consolidated across entities marked `consolidate`, and customers / vendors flagged
@@ -115,6 +115,20 @@ New templates: `entities`, `bank_accounts`, `fx_rates`, `credit_notes`, `gl_entr
 - **General ledger.** `gl_entries` (signed: debit +, credit −; `account_type` revenue / cogs / opex / …)
   drives the close-cycle metric (last posting after period end) and ledger-based custom metrics such as
   gross margin. Credit notes reduce the open receivable on their invoice.
+- **Inventory and debt.** `inventory` (`as_of_date`, `category`, `value_inr`) and `debt` (`as_of_date`,
+  `facility`, `lender`, `outstanding_inr`, `interest_rate_pct`, `principal_due_90d_inr`) are snapshots; the
+  latest on or before the week counts and one older than 45 days is ignored. They add: inventory, days of
+  inventory and the cash conversion cycle (DSO + days of inventory − DPO), and net debt. With a ledger that has
+  three closed months and `finance_cost` lines, also interest cover, debt-service cover and net debt to
+  EBITDA (EBITDA = revenue − cost of goods − opex over the last three closed months, annualised for
+  leverage). Each metric stays blank until its inputs exist. A covenant on any of them is one `covenants` row
+  (`metric` = the metric id, operator `lte` for leverage, threshold in plain units, e.g. 3.5).
+- **Foreign currency.** Open receivables and payables in a non-INR currency give foreign-currency
+  receivables, payables, net exposure, and the largest four-week rupee move among those currencies (needs
+  `fx_rates` history). Cross-border / FEMA readiness (KRA STR-4) now reads these.
+- **Existing databases.** New metrics only produce signals once a KRA lists them. New databases take the KRA
+  list from `config/kra_framework.yaml`; an existing one keeps its saved KRA version, so save the framework
+  again under KRAs (or add the metrics to a KRA) to pick them up.
 - **Plan.** `plan_metrics` rows (`week`, `metric_id`, `value` in the metric's unit) put every signal against
   plan; a gap of 5% or more in the bad direction raises its priority.
 
@@ -278,6 +292,9 @@ is ignored in multi-tenant mode. A tenant with no `email_to` gets no email: its 
   before the one being compared), otherwise it shows a dash; year-on-year needs a year of history.
   Vs plan shows only for metrics that have plan rows. The same views feed each surfaced insight: the writer may
   add one sentence on the longer-period picture, and every figure in it is checked like any other.
+- **Statutory calendar** (Briefing, `GET /api/statutory-calendar`): the next due dates for TDS, GSTR-1, PF/ESI,
+  GSTR-3B, advance tax and GSTR-9, from `config/statutory_calendar.yaml` (edit it to add or change dates).
+  These are the standard dates only: extensions and holidays are not applied and filing status is not tracked.
 - **Memory safety**: notes the model infers from conversations are sanitised, labelled untrusted in every
   prompt, and can never overwrite the CFO office's own notes (`cfo_notes` block, Memory page).
 
