@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -45,6 +47,9 @@ class Tenant:
     users_file: str | None = None
     email_to: tuple[str, ...] = field(default_factory=tuple)
     email_from: str | None = None
+    # Per-tenant overrides of global settings (the registry's whitelist), e.g.
+    # {"anthropic_model": "…", "max_llm_cost_usd_per_run": 2.0, "auth_mode": "oidc"}
+    settings: dict = field(default_factory=dict, compare=False, hash=False)
 
 
 def parse_recipients(value) -> tuple[str, ...]:
@@ -75,23 +80,63 @@ def _load(path: str | None) -> dict[str, Tenant]:
         if dup:
             raise ValueError(f"Host(s) {', '.join(sorted(dup))} assigned to more than one tenant")
         hosts_seen |= set(hosts)
+        from cfo_agent.secret_refs import resolve_secret
+
         out[tid] = Tenant(
-            tid, str(t.get("name") or tid), str(t["database_url"]), hosts, t.get("users_file"),
+            tid, str(t.get("name") or tid), resolve_secret(str(t["database_url"])), hosts, t.get("users_file"),
             email_to=parse_recipients(t.get("email_to")),
             email_from=(str(t["email_from"]).strip() or None) if t.get("email_from") else None,
+            settings=dict(t.get("settings") or {}),
         )
     return out
 
 
-def tenants() -> dict[str, Tenant]:
-    from cfo_agent.settings import get_settings
+# The registry is re-read at most every TENANT_REGISTRY_TTL_S seconds, so adding,
+# changing or disabling a tenant takes effect without a restart.
+_reg_lock = threading.Lock()
+_reg: dict = {"at": -1e9, "url": None, "data": {}}
 
-    f = get_settings().tenants_file
+
+def invalidate_registry_cache() -> None:
+    with _reg_lock:
+        _reg["at"] = -1e9
+
+
+def _registry_tenants(url: str, ttl: float) -> dict[str, Tenant]:
+    with _reg_lock:
+        fresh = _reg["url"] == url and time.monotonic() - _reg["at"] < ttl
+        if fresh:
+            return _reg["data"]
+        try:
+            from cfo_agent.registry import load_active
+
+            data = load_active(url)
+        except Exception:  # noqa: BLE001 — a control-database blip must not take every tenant down
+            logger.exception("Tenant registry unavailable; keeping the last known tenants")
+            _reg["at"] = time.monotonic()
+            return _reg["data"] if _reg["url"] == url else {}
+        _reg.update(at=time.monotonic(), url=url, data=data)
+        return data
+
+
+def tenants() -> dict[str, Tenant]:
+    # Read the global settings directly: the tenant-aware get_settings() would call
+    # back into this function to find the current tenant.
+    from cfo_agent.settings import global_settings
+
+    g = global_settings()
+    if g.control_database_url:
+        return _registry_tenants(g.control_database_url, g.tenant_registry_ttl_s)
+    f = g.tenants_file
     return _load(str(f) if f else None)
 
 
 def is_multi_tenant() -> bool:
-    return bool(tenants())
+    """With a control database the app is multi-tenant even before the first client is
+    added: unknown hosts get 404 rather than silently reaching the default database."""
+    from cfo_agent.settings import global_settings
+
+    return bool(global_settings().control_database_url) or bool(tenants())
 
 
 def current_tenant_id() -> str | None:
@@ -126,9 +171,13 @@ def for_each_tenant(fn, *args, **kwargs) -> None:
     if not is_multi_tenant():
         fn(*args, **kwargs)
         return
-    for tid in tenants():
+    from cfo_agent.tenant_prepare import ensure_ready, uses_registry
+
+    for tid, tenant in list(tenants().items()):
         with tenant_context(tid):
             try:
+                if uses_registry():
+                    ensure_ready(tenant)  # a tenant added since startup has no schema yet
                 fn(*args, **kwargs)
             except Exception:  # noqa: BLE001
                 logger.exception("Job %s failed for tenant %s", getattr(fn, "__name__", fn), tid)

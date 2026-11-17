@@ -271,5 +271,15 @@ async def route_tenant(request, call_next):
         from fastapi.responses import JSONResponse
 
         return JSONResponse({"detail": "Unknown host"}, status_code=404)
+    from cfo_agent.tenant_prepare import ensure_ready, uses_registry
+
+    if uses_registry():
+        try:
+            ensure_ready(tenant)
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not prepare the database for tenant %s", tenant.id)
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse({"detail": "This tenant is unavailable right now"}, status_code=503)
     with tenant_context(tenant.id):
         return await call_next(request)

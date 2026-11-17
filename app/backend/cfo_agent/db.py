@@ -56,6 +56,7 @@ def is_postgres_url(url: str) -> bool:
 
 
 _tenant_engines: dict[str, tuple[Engine, sessionmaker]] = {}
+_tenant_urls: dict[str, str] = {}  # the URL each cached engine was built for
 
 
 def get_engine() -> Engine:
@@ -64,9 +65,13 @@ def get_engine() -> Engine:
 
     tenant = current_tenant()
     if tenant is not None:
-        if tenant.id not in _tenant_engines:
+        if tenant.id not in _tenant_engines or _tenant_urls.get(tenant.id) != tenant.database_url:
+            old = _tenant_engines.pop(tenant.id, None)  # the registry changed this tenant's database
+            if old is not None:
+                old[0].dispose()
             eng = _make_engine(tenant.database_url)
             _tenant_engines[tenant.id] = (eng, sessionmaker(bind=eng, autoflush=False, autocommit=False))
+            _tenant_urls[tenant.id] = tenant.database_url
         return _tenant_engines[tenant.id][0]
     if _engine is not None:
         return _engine

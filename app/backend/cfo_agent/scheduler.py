@@ -259,6 +259,11 @@ def leased(job_id: str, fn, *, tenant: str | None = None, per_tenant: bool = Tru
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         if tenant:
+            from cfo_agent.tenancy import tenants
+
+            if tenant not in tenants():
+                logger.debug("Job %s skipped: tenant %s is disabled or removed", job_id, tenant)
+                return None
             with tenant_context(tenant):
                 return once(*args, **kwargs)
         if per_tenant:

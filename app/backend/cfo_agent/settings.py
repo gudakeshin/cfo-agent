@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     news_cron: str = Field(default="30 7 * * *", alias="NEWS_CRON")
     news_model: str = Field(default="claude-sonnet-5", alias="NEWS_MODEL")
     timezone: str = Field(default="Asia/Kolkata", alias="TIMEZONE")
+    # Tenant registry: a control database listing the clients (see cfo_agent/registry.py).
+    # Unset = single tenant, or the TENANTS_FILE below. Set = multi-tenant, even when empty.
+    control_database_url: str | None = Field(default=None, alias="CONTROL_DATABASE_URL")
+    tenant_registry_ttl_s: float = Field(default=30.0, alias="TENANT_REGISTRY_TTL_S")
     # India's financial year runs April to March; set 1 for a calendar-year client.
     fiscal_year_start_month: int = Field(default=4, ge=1, le=12, alias="FISCAL_YEAR_START_MONTH")
 
@@ -150,7 +154,45 @@ class Settings(BaseSettings):
 
 
 @lru_cache
-def get_settings() -> Settings:
+def global_settings() -> Settings:
+    """The process-wide settings, before any per-tenant override."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
     return Settings()  # type: ignore[call-arg]
+
+
+@lru_cache(maxsize=512)
+def _tenant_settings(tenant_id: str, overrides_json: str) -> Settings:
+    import json
+
+    from cfo_agent.secret_refs import resolve_secret
+
+    overrides = json.loads(overrides_json)
+    for key in SECRET_OVERRIDES & overrides.keys():
+        overrides[key] = resolve_secret(str(overrides[key]))
+    return global_settings().model_copy(update=overrides)
+
+
+def get_settings() -> Settings:
+    """Settings for the current request or job: the global ones, with the current
+    tenant's registry overrides applied (a small whitelist, see registry.OVERRIDABLE)."""
+    base = global_settings()
+    from cfo_agent.tenancy import current_tenant
+
+    tenant = current_tenant()
+    if tenant is None or not tenant.settings:
+        return base
+    import json
+
+    return _tenant_settings(tenant.id, json.dumps(tenant.settings, sort_keys=True))
+
+
+def _clear() -> None:
+    global_settings.cache_clear()
+    _tenant_settings.cache_clear()
+
+
+get_settings.cache_clear = _clear  # type: ignore[attr-defined]
+
+# Override values that are secret references, resolved when the settings are built.
+SECRET_OVERRIDES = {"oidc_client_secret"}

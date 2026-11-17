@@ -246,6 +246,38 @@ per tenant. Without `TENANTS_FILE` the app is single-tenant, as before.
 is ignored in multi-tenant mode. A tenant with no `email_to` gets no email: its digests are written to
 `data/outbox/<tenant>/` instead. In single-tenant mode `EMAIL_TO` may list several addresses, comma-separated.
 
+### Tenant registry (add and change clients without a restart)
+
+For more than a handful of clients, keep the list in a control database instead of a file. Set
+`CONTROL_DATABASE_URL` (a small SQLite or Postgres database of its own; `TENANT_REGISTRY_TTL_S`, default 30,
+is how often running processes re-read it) and manage clients from the command line:
+
+```bash
+python -m cfo_agent.registry add acme --name "Acme Industries" \
+  --database env:ACME_DATABASE_URL --host acme.cfo.example.com \
+  --email-to cfo@acme.com --set max_llm_cost_usd_per_run=2
+python -m cfo_agent.registry set acme --set anthropic_model=claude-sonnet-5-5
+python -m cfo_agent.registry list          # also: show, unset, disable, enable, remove, events, import
+```
+
+- **Live changes.** A new client is routable within the TTL and its database is created and migrated the
+  first time a process uses it. `disable` stops its routing (404), scheduled jobs and alerts but keeps
+  all data; `remove` deletes only the registry entry, never the client's database. Each change is written
+  to an event log (`events`).
+- **Secrets are references.** `--database env:NAME` or `file:/run/secrets/name` (Docker/Kubernetes
+  secrets, or a file a vault agent writes). The registry never stores a password; a literal URL with a
+  password is accepted but warned about, and always masked on screen. A client whose secret cannot be read
+  is left out and logged; the others are unaffected.
+- **Per-client settings.** `--set KEY=VALUE` for: `anthropic_model`, `news_model`, `max_llm_cost_usd_per_run`
+  (0 = no model calls), `max_llm_calls_per_run`, `data_mode`, `auth_mode`, and the `oidc_*` settings
+  (`oidc_client_secret` must be a secret reference), so each client can have its own identity provider.
+  Schedules and the scheduler time zone are not overridable: all clients share one schedule for now.
+- **Moving over.** `python -m cfo_agent.registry import tenants.yaml` copies an existing `TENANTS_FILE`
+  (a `settings:` block per tenant is accepted there too; `database_url` may also be a secret reference).
+  With `CONTROL_DATABASE_URL` set the app is multi-tenant even with no clients yet: unknown hosts get 404,
+  never the default database. There is no web screen for this yet; it is an operator tool, not a tenant
+  admin one.
+
 ## Product features that need set-up
 
 - **Industry templates** (KRA framework page): manufacturing (default), FMCG, NBFC. Loading one fills the
